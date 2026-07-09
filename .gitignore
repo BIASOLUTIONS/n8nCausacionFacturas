@@ -1,0 +1,25 @@
+# Entorno Python
+venv/
+__pycache__/
+*.pyc
+
+# Variables sensibles
+.env
+
+# Base de datos local
+facturas_ai.db
+*.db
+
+# Archivos de ejecución
+adjuntos/*
+procesadas/*
+errores/*
+logs/*
+excel/*
+
+# Mantener carpetas vacías en git si se requiere
+!adjuntos/.gitkeep
+!procesadas/.gitkeep
+!errores/.gitkeep
+!logs/.gitkeep
+!excel/.gitkeep
