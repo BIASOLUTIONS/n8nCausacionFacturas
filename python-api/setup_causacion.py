@@ -37,6 +37,7 @@ def crear_tablas_causacion():
             centro_costo TEXT,
             debito REAL DEFAULT 0,
             credito REAL DEFAULT 0,
+            concepto_servicio TEXT,
             descripcion TEXT,
             FOREIGN KEY (causacion_id) REFERENCES causaciones(id)
         )

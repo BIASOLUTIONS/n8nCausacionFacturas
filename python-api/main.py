@@ -3,12 +3,14 @@ from fastapi.responses import JSONResponse
 from lxml import etree
 from html import unescape
 from dotenv import load_dotenv
+from io import BytesIO
 import os
 import shutil
 import uuid
 import zipfile
 import sqlite3
 import re
+import unicodedata
 
 load_dotenv()
 
@@ -23,6 +25,11 @@ DB_PATH = os.path.join(BASE_PATH, "facturas_ai.db")
 os.makedirs(ADJUNTOS_PATH, exist_ok=True)
 os.makedirs(PROCESADAS_PATH, exist_ok=True)
 os.makedirs(ERRORES_PATH, exist_ok=True)
+
+
+def columna_existe(cursor, tabla: str, columna: str):
+    cursor.execute(f"PRAGMA table_info({tabla})")
+    return any(row[1] == columna for row in cursor.fetchall())
 
 
 def inicializar_db():
@@ -75,6 +82,9 @@ def inicializar_db():
             descripcion TEXT,
             cantidad REAL,
             valor_linea REAL,
+            concepto_servicio TEXT,
+            clasificacion_fuente TEXT,
+            clasificacion_confianza REAL,
             FOREIGN KEY (factura_id) REFERENCES facturas_recibidas(id)
         )
     """)
@@ -97,6 +107,76 @@ def inicializar_db():
             fecha_creacion DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS mapeo_erp (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            erp TEXT DEFAULT 'SIIGO',
+            proveedor_nit TEXT,
+            proveedor_nombre TEXT,
+            concepto_servicio TEXT,
+            cuenta_contable TEXT,
+            nombre_cuenta TEXT,
+            item_type_erp TEXT,
+            item_code_erp TEXT,
+            item_description_erp TEXT,
+            document_id_erp TEXT,
+            payment_id_erp TEXT,
+            tax_id_erp TEXT,
+            activo INTEGER DEFAULT 1,
+            observacion TEXT,
+            fecha_creacion DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reglas_concepto_servicio (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            erp TEXT DEFAULT 'SIIGO',
+            proveedor_nit TEXT,
+            concepto_servicio TEXT,
+            palabras_clave TEXT,
+            cuenta_contable TEXT,
+            nombre_cuenta TEXT,
+            item_type_erp TEXT,
+            item_code_erp TEXT,
+            tax_id_erp TEXT,
+            prioridad INTEGER DEFAULT 100,
+            activo INTEGER DEFAULT 1,
+            fecha_creacion DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_mapeo_erp_busqueda
+        ON mapeo_erp (
+            erp,
+            proveedor_nit,
+            concepto_servicio,
+            cuenta_contable,
+            activo
+        )
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_reglas_concepto_busqueda
+        ON reglas_concepto_servicio (
+            erp,
+            proveedor_nit,
+            concepto_servicio,
+            activo,
+            prioridad
+        )
+    """)
+
+    if not columna_existe(cursor, "facturas_lineas", "concepto_servicio"):
+        cursor.execute("ALTER TABLE facturas_lineas ADD COLUMN concepto_servicio TEXT")
+
+    if not columna_existe(cursor, "facturas_lineas", "clasificacion_fuente"):
+        cursor.execute("ALTER TABLE facturas_lineas ADD COLUMN clasificacion_fuente TEXT")
+
+    if not columna_existe(cursor, "facturas_lineas", "clasificacion_confianza"):
+        cursor.execute("ALTER TABLE facturas_lineas ADD COLUMN clasificacion_confianza REAL")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS causaciones (
@@ -126,10 +206,14 @@ def inicializar_db():
             centro_costo TEXT,
             debito REAL DEFAULT 0,
             credito REAL DEFAULT 0,
+            concepto_servicio TEXT,
             descripcion TEXT,
             FOREIGN KEY (causacion_id) REFERENCES causaciones(id)
         )
     """)
+
+    if not columna_existe(cursor, "causacion_lineas", "concepto_servicio"):
+        cursor.execute("ALTER TABLE causacion_lineas ADD COLUMN concepto_servicio TEXT")
 
     conn.commit()
     conn.close()
@@ -151,6 +235,856 @@ def buscar_xml_pdf(carpeta: str):
                 pdf_files.append(ruta)
 
     return xml_files, pdf_files
+
+
+def normalizar_clave_excel(valor):
+    if valor is None:
+        return ""
+
+    texto = str(valor).strip().lower()
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(c for c in texto if not unicodedata.combining(c))
+    texto = re.sub(r"[^a-z0-9]+", "_", texto)
+    return texto.strip("_")
+
+
+def valor_texto_excel(valor):
+    if valor is None:
+        return None
+
+    if isinstance(valor, str):
+        texto = valor.strip()
+        return texto or None
+
+    if isinstance(valor, float) and valor.is_integer():
+        return str(int(valor))
+
+    return str(valor).strip() or None
+
+
+def valor_numero_excel(valor, default=0):
+    if valor is None or valor == "":
+        return default
+
+    if isinstance(valor, (int, float)):
+        return float(valor)
+
+    texto = str(valor).strip()
+    if not texto:
+        return default
+
+    texto = re.sub(r"[^0-9,.\-]", "", texto)
+
+    if "," in texto and "." in texto:
+        if texto.rfind(",") > texto.rfind("."):
+            texto = texto.replace(".", "").replace(",", ".")
+        else:
+            texto = texto.replace(",", "")
+    elif "," in texto:
+        texto = texto.replace(",", ".")
+
+    try:
+        return float(texto)
+    except ValueError:
+        return default
+
+
+def valor_fecha_excel(valor):
+    if valor is None:
+        return None
+
+    if hasattr(valor, "date"):
+        return valor.date().isoformat()
+
+    return valor_texto_excel(valor)
+
+
+def valor_activo_excel(valor, default=1):
+    if valor is None or valor == "":
+        return default
+
+    texto = normalizar_clave_excel(valor)
+
+    if texto in {"1", "si", "s", "true", "activo", "activa", "yes", "y"}:
+        return 1
+
+    if texto in {"0", "no", "false", "inactivo", "inactiva", "n"}:
+        return 0
+
+    return default
+
+
+def obtener_valor_fila(fila, *alias):
+    for nombre in alias:
+        clave = normalizar_clave_excel(nombre)
+        if clave in fila:
+            valor = fila[clave]
+            if valor is not None and valor != "":
+                return valor
+
+    return None
+
+
+def obtener_hoja_excel(workbook, *alias):
+    hojas_por_nombre = {
+        normalizar_clave_excel(nombre): nombre
+        for nombre in workbook.sheetnames
+    }
+
+    for nombre in alias:
+        clave = normalizar_clave_excel(nombre)
+        if clave in hojas_por_nombre:
+            return workbook[hojas_por_nombre[clave]]
+
+    return None
+
+
+def leer_filas_excel(worksheet):
+    filas = worksheet.iter_rows(values_only=True)
+
+    for fila_encabezado in filas:
+        encabezados = [normalizar_clave_excel(valor) for valor in fila_encabezado]
+
+        if any(encabezados):
+            break
+    else:
+        return []
+
+    registros = []
+
+    for fila in filas:
+        registro = {}
+
+        for indice, encabezado in enumerate(encabezados):
+            if not encabezado:
+                continue
+
+            valor = fila[indice] if indice < len(fila) else None
+            registro[encabezado] = valor
+
+        if any(valor not in (None, "") for valor in registro.values()):
+            registros.append(registro)
+
+    return registros
+
+
+def construir_historico_desde_excel(fila, nombre_archivo):
+    proveedor_nit = valor_texto_excel(obtener_valor_fila(
+        fila,
+        "proveedor_nit",
+        "nit_proveedor",
+        "nit",
+        "tercero_nit",
+        "identificacion",
+        "identificacion_tercero"
+    ))
+    cuenta_contable = valor_texto_excel(obtener_valor_fila(
+        fila,
+        "cuenta_contable",
+        "codigo_cuenta",
+        "cuenta_codigo",
+        "cuenta"
+    ))
+
+    if not proveedor_nit or not cuenta_contable:
+        return None
+
+    return {
+        "proveedor_nit": proveedor_nit,
+        "proveedor_nombre": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "proveedor_nombre",
+            "nombre_proveedor",
+            "proveedor",
+            "tercero",
+            "nombre_tercero",
+            "nombre"
+        )),
+        "descripcion": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "descripcion",
+            "detalle",
+            "concepto",
+            "observacion",
+            "producto_servicio"
+        )),
+        "cuenta_contable": cuenta_contable,
+        "nombre_cuenta": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "nombre_cuenta",
+            "cuenta_nombre",
+            "descripcion_cuenta"
+        )),
+        "centro_costo": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "centro_costo",
+            "centro_de_costo",
+            "codigo_centro_costo",
+            "cc"
+        )),
+        "debito": valor_numero_excel(obtener_valor_fila(
+            fila,
+            "debito",
+            "debitos",
+            "valor_debito"
+        )),
+        "credito": valor_numero_excel(obtener_valor_fila(
+            fila,
+            "credito",
+            "creditos",
+            "valor_credito"
+        )),
+        "cuenta_iva": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "cuenta_iva",
+            "iva_cuenta"
+        )),
+        "cuenta_retencion": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "cuenta_retencion",
+            "retencion_cuenta",
+            "cuenta_retefuente"
+        )),
+        "fuente": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "fuente",
+            "origen"
+        )) or f"Excel: {nombre_archivo}",
+        "fecha_documento": valor_fecha_excel(obtener_valor_fila(
+            fila,
+            "fecha_documento",
+            "fecha",
+            "fecha_comprobante",
+            "fecha_factura"
+        ))
+    }
+
+
+def construir_mapeo_desde_excel(fila):
+    proveedor_nit = valor_texto_excel(obtener_valor_fila(
+        fila,
+        "proveedor_nit",
+        "nit_proveedor",
+        "nit",
+        "tercero_nit"
+    ))
+    concepto_servicio = valor_texto_excel(obtener_valor_fila(
+        fila,
+        "concepto_servicio",
+        "concepto",
+        "servicio",
+        "producto_servicio",
+        "categoria"
+    ))
+    cuenta_contable = valor_texto_excel(obtener_valor_fila(
+        fila,
+        "cuenta_contable",
+        "codigo_cuenta",
+        "cuenta_codigo",
+        "cuenta"
+    ))
+    item_code_erp = valor_texto_excel(obtener_valor_fila(
+        fila,
+        "item_code_erp",
+        "codigo_item_erp",
+        "item_code",
+        "code",
+        "codigo_producto",
+        "codigo"
+    ))
+
+    if not proveedor_nit or not (concepto_servicio or cuenta_contable or item_code_erp):
+        return None
+
+    nombre_cuenta = valor_texto_excel(obtener_valor_fila(
+        fila,
+        "nombre_cuenta",
+        "cuenta_nombre",
+        "descripcion_cuenta"
+    ))
+    item_description_erp = valor_texto_excel(obtener_valor_fila(
+        fila,
+        "item_description_erp",
+        "descripcion_item_erp",
+        "item_description",
+        "description",
+        "descripcion_producto"
+    ))
+
+    concepto_servicio = concepto_servicio or inferir_concepto_servicio(
+        item_description_erp,
+        nombre_cuenta
+    )
+
+    return {
+        "erp": valor_texto_excel(obtener_valor_fila(fila, "erp")) or "SIIGO",
+        "proveedor_nit": proveedor_nit,
+        "proveedor_nombre": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "proveedor_nombre",
+            "nombre_proveedor",
+            "proveedor",
+            "tercero",
+            "nombre_tercero",
+            "nombre"
+        )),
+        "concepto_servicio": concepto_servicio,
+        "cuenta_contable": cuenta_contable,
+        "nombre_cuenta": nombre_cuenta,
+        "item_type_erp": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "item_type_erp",
+            "tipo_item_erp",
+            "tipo_erp",
+            "item_type",
+            "type"
+        )),
+        "item_code_erp": item_code_erp,
+        "item_description_erp": item_description_erp,
+        "document_id_erp": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "document_id_erp",
+            "documento_erp",
+            "document_id"
+        )),
+        "payment_id_erp": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "payment_id_erp",
+            "medio_pago_erp",
+            "payment_id"
+        )),
+        "tax_id_erp": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "tax_id_erp",
+            "impuesto_erp",
+            "tax_id"
+        )),
+        "activo": valor_activo_excel(obtener_valor_fila(fila, "activo")),
+        "observacion": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "observacion",
+            "observaciones",
+            "nota"
+        ))
+    }
+
+
+def construir_regla_desde_excel(fila):
+    proveedor_nit = valor_texto_excel(obtener_valor_fila(
+        fila,
+        "proveedor_nit",
+        "nit_proveedor",
+        "nit",
+        "tercero_nit"
+    ))
+    concepto_servicio = valor_texto_excel(obtener_valor_fila(
+        fila,
+        "concepto_servicio",
+        "concepto",
+        "servicio",
+        "producto_servicio",
+        "categoria"
+    ))
+    palabras_clave = valor_texto_excel(obtener_valor_fila(
+        fila,
+        "palabras_clave",
+        "keywords",
+        "palabras",
+        "regla"
+    ))
+
+    if not proveedor_nit or not concepto_servicio or not palabras_clave:
+        return None
+
+    return {
+        "erp": valor_texto_excel(obtener_valor_fila(fila, "erp")) or "SIIGO",
+        "proveedor_nit": proveedor_nit,
+        "concepto_servicio": concepto_servicio,
+        "palabras_clave": palabras_clave,
+        "cuenta_contable": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "cuenta_contable",
+            "codigo_cuenta",
+            "cuenta_codigo",
+            "cuenta"
+        )),
+        "nombre_cuenta": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "nombre_cuenta",
+            "cuenta_nombre",
+            "descripcion_cuenta"
+        )),
+        "item_type_erp": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "item_type_erp",
+            "tipo_item_erp",
+            "tipo_erp",
+            "item_type",
+            "type"
+        )),
+        "item_code_erp": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "item_code_erp",
+            "codigo_item_erp",
+            "item_code",
+            "code",
+            "codigo_producto",
+            "codigo"
+        )),
+        "tax_id_erp": valor_texto_excel(obtener_valor_fila(
+            fila,
+            "tax_id_erp",
+            "impuesto_erp",
+            "tax_id"
+        )),
+        "prioridad": int(valor_numero_excel(obtener_valor_fila(fila, "prioridad"), 100)),
+        "activo": valor_activo_excel(obtener_valor_fila(fila, "activo"))
+    }
+
+
+def normalizar_texto_busqueda(valor):
+    return normalizar_clave_excel(valor).replace("_", " ")
+
+
+def dividir_palabras_clave(valor):
+    if not valor:
+        return []
+
+    partes = re.split(r"[,;|\n]+", str(valor))
+    palabras = []
+
+    for parte in partes:
+        texto = normalizar_texto_busqueda(parte)
+
+        if texto and texto not in palabras:
+            palabras.append(texto)
+
+    return palabras
+
+
+def generar_palabras_desde_concepto(concepto):
+    texto = normalizar_texto_busqueda(concepto)
+
+    if not texto:
+        return []
+
+    palabras = [texto]
+
+    for token in texto.split():
+        if len(token) >= 3 and token not in palabras:
+            palabras.append(token)
+
+    return palabras
+
+
+CONCEPTOS_SERVICIO_KEYWORDS = [
+    ("CERTIFICADO_SSL", ["certificado ssl", "ssl", "tls", "https"]),
+    ("HOSTING", ["hosting", "hospedaje", "web hosting", "alojamiento web"]),
+    ("DOMINIO", ["dominio", "domain", "renovacion dominio"]),
+    ("CORREO", ["correo", "email", "e mail", "mail", "office 365", "google workspace"]),
+    ("LICENCIA", ["licencia", "license", "suscripcion", "subscription"]),
+    ("SERVIDOR", ["servidor", "server", "vps", "cloud", "nube"]),
+    ("DESARROLLO_SOFTWARE", ["desarrollo software", "software", "programacion", "aplicacion"]),
+    ("SERVICIOS_TI", ["servicios ti", "consultoria ti", "tecnologia", "sistemas"]),
+    ("TELECOMUNICACIONES", ["internet", "fibra", "telefonia", "telecomunicaciones"]),
+    ("MANTENIMIENTO_EQUIPO", ["mantenimiento", "equipo computacion", "computador"]),
+    ("PAPELERIA", ["papeleria", "utiles", "fotocopias"]),
+    ("COMBUSTIBLE", ["combustible", "lubricante", "gasolina", "diesel"]),
+    ("REGISTRO_MERCANTIL", ["registro mercantil", "camara de comercio"]),
+    ("EDUCATIVO", ["educativo", "capacitacion", "curso", "universidad"]),
+    ("ASESORIA", ["asesoria", "consultoria"]),
+]
+
+
+def inferir_concepto_servicio(*textos):
+    texto = " ".join(normalizar_texto_busqueda(t) for t in textos if t)
+
+    if not texto:
+        return None
+
+    for concepto, palabras in CONCEPTOS_SERVICIO_KEYWORDS:
+        if any(normalizar_texto_busqueda(palabra) in texto for palabra in palabras):
+            return concepto
+
+    return None
+
+
+def conceptos_compatibles(concepto_solicitado, concepto_mapeo):
+    if not concepto_solicitado:
+        return True
+
+    if not concepto_mapeo:
+        return True
+
+    if concepto_solicitado == concepto_mapeo:
+        return True
+
+    grupo_ti = {
+        "CERTIFICADO_SSL",
+        "HOSTING",
+        "DOMINIO",
+        "CORREO",
+        "LICENCIA",
+        "SERVIDOR",
+        "DESARROLLO_SOFTWARE",
+        "SERVICIOS_TI"
+    }
+
+    if concepto_solicitado in grupo_ti and concepto_mapeo in grupo_ti:
+        return True
+
+    return False
+
+
+def calcular_match_palabras(descripcion_normalizada, palabras):
+    coincidencias = []
+
+    for palabra in palabras:
+        palabra_normalizada = normalizar_texto_busqueda(palabra)
+
+        if not palabra_normalizada:
+            continue
+
+        if palabra_normalizada in descripcion_normalizada:
+            coincidencias.append(palabra_normalizada)
+
+    return coincidencias
+
+
+def cargar_reglas_clasificacion(cursor, proveedor_nit):
+    cursor.execute("""
+        SELECT
+            id,
+            erp,
+            proveedor_nit,
+            concepto_servicio,
+            palabras_clave,
+            cuenta_contable,
+            nombre_cuenta,
+            item_type_erp,
+            item_code_erp,
+            tax_id_erp,
+            prioridad
+        FROM reglas_concepto_servicio
+        WHERE activo = 1
+          AND (
+                proveedor_nit = ?
+                OR proveedor_nit IS NULL
+                OR proveedor_nit = ''
+          )
+        ORDER BY
+            CASE
+                WHEN proveedor_nit = ? THEN 0
+                ELSE 1
+            END,
+            prioridad ASC,
+            id ASC
+    """, (proveedor_nit, proveedor_nit))
+
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def cargar_mapeos_clasificacion(cursor, proveedor_nit):
+    cursor.execute("""
+        SELECT
+            id,
+            erp,
+            proveedor_nit,
+            proveedor_nombre,
+            concepto_servicio,
+            cuenta_contable,
+            nombre_cuenta,
+            item_type_erp,
+            item_code_erp,
+            item_description_erp,
+            tax_id_erp,
+            observacion
+        FROM mapeo_erp
+        WHERE activo = 1
+          AND proveedor_nit = ?
+        ORDER BY id ASC
+    """, (proveedor_nit,))
+
+    mapeos = []
+
+    for row in cursor.fetchall():
+        mapeo = dict(row)
+
+        if not mapeo.get("concepto_servicio"):
+            mapeo["concepto_servicio"] = inferir_concepto_servicio(
+                mapeo.get("item_description_erp"),
+                mapeo.get("nombre_cuenta"),
+                mapeo.get("observacion")
+            )
+
+        mapeos.append(mapeo)
+
+    return mapeos
+
+
+def buscar_mapeo_erp(cursor, proveedor_nit, concepto_servicio=None, cuenta_contable=None):
+    cursor.execute("""
+        SELECT *
+        FROM mapeo_erp
+        WHERE activo = 1
+          AND proveedor_nit = ?
+        ORDER BY
+            CASE
+                WHEN concepto_servicio = ? THEN 0
+                WHEN concepto_servicio IS NULL OR TRIM(concepto_servicio) = '' THEN 1
+                ELSE 2
+            END,
+            CASE
+                WHEN cuenta_contable = ? THEN 0
+                WHEN ? IS NULL THEN 1
+                ELSE 2
+            END,
+            id ASC
+    """, (proveedor_nit, concepto_servicio, cuenta_contable, cuenta_contable))
+
+    candidatos = []
+
+    for row in cursor.fetchall():
+        mapeo = dict(row)
+        concepto_mapeo = mapeo.get("concepto_servicio") or inferir_concepto_servicio(
+            mapeo.get("item_description_erp"),
+            mapeo.get("nombre_cuenta"),
+            mapeo.get("observacion")
+        )
+
+        if not conceptos_compatibles(concepto_servicio, concepto_mapeo):
+            continue
+
+        if cuenta_contable and mapeo.get("cuenta_contable") and mapeo.get("cuenta_contable") != cuenta_contable:
+            continue
+
+        mapeo["concepto_servicio_resuelto"] = concepto_mapeo
+        candidatos.append(mapeo)
+
+    if not candidatos:
+        return None
+
+    if concepto_servicio:
+        exactos = [
+            m for m in candidatos
+            if m.get("concepto_servicio_resuelto") == concepto_servicio
+        ]
+        if exactos:
+            return exactos[0]
+
+    if len(candidatos) == 1:
+        return candidatos[0]
+
+    genericos = [
+        m for m in candidatos
+        if not m.get("concepto_servicio") and m.get("item_type_erp") and m.get("item_code_erp")
+    ]
+
+    return genericos[0] if len(genericos) == 1 else None
+
+
+def clasificar_linea_por_reglas(descripcion, reglas):
+    descripcion_normalizada = normalizar_texto_busqueda(descripcion)
+
+    for regla in reglas:
+        palabras = dividir_palabras_clave(regla.get("palabras_clave"))
+        coincidencias = calcular_match_palabras(descripcion_normalizada, palabras)
+
+        if coincidencias:
+            return {
+                "concepto_servicio": regla.get("concepto_servicio"),
+                "clasificacion_fuente": "reglas_concepto_servicio",
+                "clasificacion_confianza": 100,
+                "regla_id": regla.get("id"),
+                "mapeo_erp_id": None,
+                "coincidencias": coincidencias
+            }
+
+    return None
+
+
+def clasificar_linea_por_patrones_base(descripcion):
+    concepto = inferir_concepto_servicio(descripcion)
+
+    if not concepto:
+        return None
+
+    return {
+        "concepto_servicio": concepto,
+        "clasificacion_fuente": "patrones_base",
+        "clasificacion_confianza": 75,
+        "regla_id": None,
+        "mapeo_erp_id": None,
+        "coincidencias": [concepto]
+    }
+
+
+def clasificar_linea_por_mapeo(descripcion, mapeos):
+    descripcion_normalizada = normalizar_texto_busqueda(descripcion)
+    candidatos = []
+
+    for mapeo in mapeos:
+        palabras = []
+        palabras.extend(generar_palabras_desde_concepto(mapeo.get("concepto_servicio")))
+        palabras.extend(dividir_palabras_clave(mapeo.get("item_description_erp")))
+        palabras.extend(dividir_palabras_clave(mapeo.get("observacion")))
+
+        nombre_cuenta = normalizar_texto_busqueda(mapeo.get("nombre_cuenta"))
+        if nombre_cuenta:
+            palabras.append(nombre_cuenta)
+
+        palabras_unicas = []
+
+        for palabra in palabras:
+            if palabra and palabra not in palabras_unicas:
+                palabras_unicas.append(palabra)
+
+        coincidencias = calcular_match_palabras(descripcion_normalizada, palabras_unicas)
+
+        if not coincidencias:
+            continue
+
+        tiene_concepto_exacto = (
+            normalizar_texto_busqueda(mapeo.get("concepto_servicio"))
+            in coincidencias
+        )
+        confianza = 85 if tiene_concepto_exacto else 70
+
+        candidatos.append({
+            "concepto_servicio": mapeo.get("concepto_servicio"),
+            "clasificacion_fuente": "mapeo_erp",
+            "clasificacion_confianza": confianza,
+            "regla_id": None,
+            "mapeo_erp_id": mapeo.get("id"),
+            "coincidencias": coincidencias
+        })
+
+    if not candidatos:
+        return None
+
+    candidatos.sort(
+        key=lambda c: (
+            c["clasificacion_confianza"],
+            len(c["coincidencias"])
+        ),
+        reverse=True
+    )
+
+    return candidatos[0]
+
+
+def clasificar_lineas_factura(factura_id: int, guardar: bool = True):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT *
+        FROM facturas_recibidas
+        WHERE id = ?
+    """, (factura_id,))
+
+    factura_row = cursor.fetchone()
+
+    if not factura_row:
+        conn.close()
+        return {
+            "ok": False,
+            "status_code": 404,
+            "error": f"No existe la factura {factura_id}."
+        }
+
+    factura = dict(factura_row)
+    proveedor_nit = factura.get("proveedor_nit")
+
+    cursor.execute("""
+        SELECT
+            id,
+            factura_id,
+            descripcion,
+            cantidad,
+            valor_linea,
+            concepto_servicio,
+            clasificacion_fuente,
+            clasificacion_confianza
+        FROM facturas_lineas
+        WHERE factura_id = ?
+        ORDER BY id
+    """, (factura_id,))
+
+    lineas = [dict(row) for row in cursor.fetchall()]
+
+    reglas = cargar_reglas_clasificacion(cursor, proveedor_nit)
+    mapeos = cargar_mapeos_clasificacion(cursor, proveedor_nit)
+
+    clasificaciones = []
+    pendientes = []
+
+    for linea in lineas:
+        clasificacion = clasificar_linea_por_reglas(linea.get("descripcion"), reglas)
+
+        if not clasificacion:
+            clasificacion = clasificar_linea_por_patrones_base(linea.get("descripcion"))
+
+        if not clasificacion:
+            clasificacion = clasificar_linea_por_mapeo(linea.get("descripcion"), mapeos)
+
+        if not clasificacion:
+            clasificacion = {
+                "concepto_servicio": None,
+                "clasificacion_fuente": None,
+                "clasificacion_confianza": 0,
+                "regla_id": None,
+                "mapeo_erp_id": None,
+                "coincidencias": []
+            }
+            pendientes.append(linea.get("id"))
+
+        resultado_linea = {
+            "linea_id": linea.get("id"),
+            "descripcion": linea.get("descripcion"),
+            "cantidad": linea.get("cantidad"),
+            "valor_linea": linea.get("valor_linea"),
+            **clasificacion
+        }
+        clasificaciones.append(resultado_linea)
+
+        if guardar:
+            cursor.execute("""
+                UPDATE facturas_lineas
+                SET
+                    concepto_servicio = ?,
+                    clasificacion_fuente = ?,
+                    clasificacion_confianza = ?
+                WHERE id = ?
+            """, (
+                clasificacion.get("concepto_servicio"),
+                clasificacion.get("clasificacion_fuente"),
+                clasificacion.get("clasificacion_confianza"),
+                linea.get("id")
+            ))
+
+    if guardar:
+        conn.commit()
+
+    conn.close()
+
+    return {
+        "ok": True,
+        "factura_id": factura_id,
+        "proveedor_nit": proveedor_nit,
+        "proveedor_nombre": factura.get("proveedor_nombre"),
+        "numero_factura": factura.get("numero_factura"),
+        "guardar": guardar,
+        "total_lineas": len(lineas),
+        "lineas_clasificadas": len(lineas) - len(pendientes),
+        "lineas_pendientes": len(pendientes),
+        "requiere_revision_concepto": len(pendientes) > 0,
+        "estado": "REQUIERE_REVISION_CONCEPTO" if pendientes else "CONCEPTOS_CLASIFICADOS",
+        "total_reglas_disponibles": len(reglas),
+        "total_mapeos_disponibles": len(mapeos),
+        "clasificaciones": clasificaciones
+    }
 
 
 def safe_extract_zip(zip_ref: zipfile.ZipFile, destino: str):
@@ -470,30 +1404,7 @@ def construir_propuesta_causacion(factura_id: int):
 
     factura = dict(factura_row)
     proveedor_nit = factura.get("proveedor_nit")
-
-    cursor.execute("""
-        SELECT *
-        FROM contabilizaciones_historicas
-        WHERE proveedor_nit = ?
-        ORDER BY fecha_documento DESC, id DESC
-        LIMIT 20
-    """, (proveedor_nit,))
-
-    historico = [dict(row) for row in cursor.fetchall()]
     conn.close()
-
-    if not historico:
-        return {
-            "ok": True,
-            "factura_id": factura_id,
-            "proveedor_nit": proveedor_nit,
-            "proveedor_nombre": factura.get("proveedor_nombre"),
-            "numero_factura": factura.get("numero_factura"),
-            "requiere_revision": True,
-            "confianza": 0,
-            "mensaje": "No existe histórico contable para este proveedor.",
-            "propuesta": []
-        }
 
     total_pagar = round(float(factura.get("total_pagar") or 0), 2)
     iva = round(float(factura.get("iva") or 0), 2)
@@ -506,6 +1417,55 @@ def construir_propuesta_causacion(factura_id: int):
         valor_gasto = total_sin_impuestos
     else:
         valor_gasto = round(total_pagar - iva, 2)
+
+    clasificacion = clasificar_lineas_factura(factura_id, guardar=True)
+
+    if not clasificacion.get("ok"):
+        return clasificacion
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT *
+        FROM contabilizaciones_historicas
+        WHERE proveedor_nit = ?
+        ORDER BY fecha_documento DESC, id DESC
+        LIMIT 20
+    """, (proveedor_nit,))
+
+    historico = [dict(row) for row in cursor.fetchall()]
+
+    cursor.execute("""
+        SELECT
+            id,
+            descripcion,
+            cantidad,
+            valor_linea,
+            concepto_servicio,
+            clasificacion_fuente,
+            clasificacion_confianza
+        FROM facturas_lineas
+        WHERE factura_id = ?
+        ORDER BY id
+    """, (factura_id,))
+
+    lineas_factura = [dict(row) for row in cursor.fetchall()]
+
+    if not historico:
+        conn.close()
+        return {
+            "ok": True,
+            "factura_id": factura_id,
+            "proveedor_nit": proveedor_nit,
+            "proveedor_nombre": factura.get("proveedor_nombre"),
+            "numero_factura": factura.get("numero_factura"),
+            "requiere_revision": True,
+            "confianza": 0,
+            "mensaje": "No existe histórico contable para este proveedor.",
+            "propuesta": []
+        }
 
     cuenta_gasto = None
     cuenta_iva = None
@@ -533,11 +1493,211 @@ def construir_propuesta_causacion(factura_id: int):
             if credito > 0:
                 cuenta_pagar = h
 
+    if lineas_factura:
+        if clasificacion.get("requiere_revision_concepto"):
+            conn.close()
+            return {
+                "ok": True,
+                "factura_id": factura_id,
+                "proveedor_nit": proveedor_nit,
+                "proveedor_nombre": factura.get("proveedor_nombre"),
+                "numero_factura": factura.get("numero_factura"),
+                "fecha_factura": factura.get("fecha_factura"),
+                "subtotal": subtotal,
+                "iva": iva,
+                "total_pagar": total_pagar,
+                "valor_gasto": valor_gasto,
+                "total_historicos": len(historico),
+                "confianza": 0,
+                "requiere_revision": True,
+                "estado": "REQUIERE_REVISION_CONCEPTO",
+                "mensaje": "Una o mÃ¡s lÃ­neas de la factura no pudieron clasificarse por producto/servicio.",
+                "clasificacion": clasificacion,
+                "propuesta": []
+            }
+
+        grupos = {}
+
+        for linea in lineas_factura:
+            concepto = linea.get("concepto_servicio")
+
+            if not concepto:
+                continue
+
+            if concepto not in grupos:
+                grupos[concepto] = {
+                    "concepto_servicio": concepto,
+                    "valor": 0,
+                    "descripciones": [],
+                    "confianzas": []
+                }
+
+            grupos[concepto]["valor"] += float(linea.get("valor_linea") or 0)
+            grupos[concepto]["descripciones"].append(linea.get("descripcion"))
+            grupos[concepto]["confianzas"].append(float(linea.get("clasificacion_confianza") or 0))
+
+        if grupos and valor_gasto > 0:
+            suma_grupos = round(sum(g["valor"] for g in grupos.values()), 2)
+            diferencia = round(valor_gasto - suma_grupos, 2)
+
+            if diferencia and abs(diferencia) <= max(1, round(valor_gasto * 0.02, 2)):
+                primer_grupo = next(iter(grupos.values()))
+                primer_grupo["valor"] = round(primer_grupo["valor"] + diferencia, 2)
+
+        faltantes_mapeo = []
+        propuesta = []
+
+        for concepto, grupo in grupos.items():
+            mapeo = buscar_mapeo_erp(cursor, proveedor_nit, concepto)
+
+            if not mapeo:
+                faltantes_mapeo.append({
+                    "concepto_servicio": concepto,
+                    "motivo": "No existe mapeo ERP activo para proveedor + concepto.",
+                    "valor": round(grupo["valor"], 2),
+                    "descripciones": grupo["descripciones"]
+                })
+                continue
+
+            if not mapeo.get("item_type_erp") or not mapeo.get("item_code_erp"):
+                faltantes_mapeo.append({
+                    "concepto_servicio": concepto,
+                    "mapeo_erp_id": mapeo.get("id"),
+                    "motivo": "El mapeo ERP no tiene item_type_erp o item_code_erp.",
+                    "valor": round(grupo["valor"], 2),
+                    "descripciones": grupo["descripciones"]
+                })
+                continue
+
+            propuesta.append({
+                "tipo": "GASTO",
+                "concepto_servicio": concepto,
+                "cuenta_contable": mapeo.get("cuenta_contable"),
+                "nombre_cuenta": mapeo.get("nombre_cuenta"),
+                "centro_costo": centro_costo,
+                "debito": round(grupo["valor"], 2),
+                "credito": 0,
+                "descripcion": " / ".join(d for d in grupo["descripciones"] if d)[:500],
+                "mapeo_erp_id": mapeo.get("id"),
+                "item_type_erp": mapeo.get("item_type_erp"),
+                "item_code_erp": mapeo.get("item_code_erp"),
+                "item_description_erp": mapeo.get("item_description_erp"),
+                "tax_id_erp": mapeo.get("tax_id_erp"),
+                "document_id_erp": mapeo.get("document_id_erp"),
+                "payment_id_erp": mapeo.get("payment_id_erp")
+            })
+
+        if faltantes_mapeo:
+            conn.close()
+            return {
+                "ok": True,
+                "factura_id": factura_id,
+                "proveedor_nit": proveedor_nit,
+                "proveedor_nombre": factura.get("proveedor_nombre"),
+                "numero_factura": factura.get("numero_factura"),
+                "fecha_factura": factura.get("fecha_factura"),
+                "subtotal": subtotal,
+                "iva": iva,
+                "total_pagar": total_pagar,
+                "valor_gasto": valor_gasto,
+                "total_historicos": len(historico),
+                "confianza": 0,
+                "requiere_revision": True,
+                "estado": "REQUIERE_MAPEO_ERP",
+                "mensaje": "Una o mÃ¡s lÃ­neas clasificadas no tienen mapeo ERP suficiente.",
+                "faltantes_mapeo": faltantes_mapeo,
+                "clasificacion": clasificacion,
+                "propuesta": []
+            }
+
+        if iva > 0:
+            if not cuenta_iva:
+                conn.close()
+                return {
+                    "ok": True,
+                    "factura_id": factura_id,
+                    "proveedor_nit": proveedor_nit,
+                    "proveedor_nombre": factura.get("proveedor_nombre"),
+                    "numero_factura": factura.get("numero_factura"),
+                    "requiere_revision": True,
+                    "estado": "REQUIERE_REVISION",
+                    "confianza": 0,
+                    "mensaje": "La factura tiene IVA, pero no se encontrÃ³ cuenta IVA en el histÃ³rico.",
+                    "propuesta": []
+                }
+
+            propuesta.append({
+                "tipo": "IVA",
+                "concepto_servicio": "IVA",
+                "cuenta_contable": cuenta_iva.get("cuenta_contable"),
+                "nombre_cuenta": cuenta_iva.get("nombre_cuenta"),
+                "centro_costo": centro_costo,
+                "debito": iva,
+                "credito": 0,
+                "descripcion": "IVA descontable segÃºn histÃ³rico del proveedor"
+            })
+
+        if not cuenta_pagar:
+            conn.close()
+            return {
+                "ok": True,
+                "factura_id": factura_id,
+                "proveedor_nit": proveedor_nit,
+                "proveedor_nombre": factura.get("proveedor_nombre"),
+                "numero_factura": factura.get("numero_factura"),
+                "requiere_revision": True,
+                "estado": "REQUIERE_REVISION",
+                "confianza": 0,
+                "mensaje": "No se encontrÃ³ cuenta por pagar en el histÃ³rico del proveedor.",
+                "propuesta": []
+            }
+
+        propuesta.append({
+            "tipo": "CXP",
+            "concepto_servicio": "CXP",
+            "cuenta_contable": cuenta_pagar.get("cuenta_contable"),
+            "nombre_cuenta": cuenta_pagar.get("nombre_cuenta"),
+            "centro_costo": centro_costo,
+            "debito": 0,
+            "credito": total_pagar,
+            "descripcion": "Cuenta por pagar segÃºn histÃ³rico del proveedor"
+        })
+
+        confianza_lineas = [
+            c.get("clasificacion_confianza") or 0
+            for c in clasificacion.get("clasificaciones", [])
+        ]
+        confianza = min(confianza_lineas) if confianza_lineas else 80
+        conn.close()
+
+        return {
+            "ok": True,
+            "factura_id": factura_id,
+            "proveedor_nit": proveedor_nit,
+            "proveedor_nombre": factura.get("proveedor_nombre"),
+            "numero_factura": factura.get("numero_factura"),
+            "fecha_factura": factura.get("fecha_factura"),
+            "subtotal": subtotal,
+            "iva": iva,
+            "total_pagar": total_pagar,
+            "valor_gasto": valor_gasto,
+            "total_historicos": len(historico),
+            "confianza": confianza,
+            "requiere_revision": False,
+            "estado": "PROPUESTA_CONCEPTO_SERVICIO",
+            "clasificacion": clasificacion,
+            "propuesta": propuesta
+        }
+
     propuesta = []
 
     if cuenta_gasto:
         propuesta.append({
-            "tipo": "gasto",
+            "tipo": "GASTO",
+            "concepto_servicio": inferir_concepto_servicio(
+                cuenta_gasto.get("nombre_cuenta"),
+                cuenta_gasto.get("descripcion")
+            ) or "OTRO",
             "cuenta_contable": cuenta_gasto.get("cuenta_contable"),
             "nombre_cuenta": cuenta_gasto.get("nombre_cuenta"),
             "centro_costo": centro_costo,
@@ -548,7 +1708,8 @@ def construir_propuesta_causacion(factura_id: int):
 
     if iva > 0 and cuenta_iva:
         propuesta.append({
-            "tipo": "iva",
+            "tipo": "IVA",
+            "concepto_servicio": "IVA",
             "cuenta_contable": cuenta_iva.get("cuenta_contable"),
             "nombre_cuenta": cuenta_iva.get("nombre_cuenta"),
             "centro_costo": centro_costo,
@@ -559,7 +1720,8 @@ def construir_propuesta_causacion(factura_id: int):
 
     if cuenta_pagar:
         propuesta.append({
-            "tipo": "cuenta_por_pagar",
+            "tipo": "CXP",
+            "concepto_servicio": "CXP",
             "cuenta_contable": cuenta_pagar.get("cuenta_contable"),
             "nombre_cuenta": cuenta_pagar.get("nombre_cuenta"),
             "centro_costo": centro_costo,
@@ -569,6 +1731,7 @@ def construir_propuesta_causacion(factura_id: int):
         })
 
     requiere_revision = len(propuesta) == 0
+    conn.close()
 
     return {
         "ok": True,
@@ -584,6 +1747,7 @@ def construir_propuesta_causacion(factura_id: int):
         "total_historicos": len(historico),
         "confianza": 80 if propuesta else 0,
         "requiere_revision": requiere_revision,
+        "estado": "PROPUESTA_HISTORICO_SIMPLE" if propuesta else "REQUIERE_REVISION",
         "propuesta": propuesta
     }
 
@@ -654,6 +1818,7 @@ def parsear_respuesta_causacion(subject: str, body: str):
             tipo = partes[0].upper()
             cuenta = partes[1]
             nombre_cuenta = partes[2]
+            concepto_servicio = partes[3] if len(partes) >= 4 else None
 
             if tipo not in ["GASTO", "IVA", "CXP", "CUENTA_POR_PAGAR"]:
                 raise ValueError(
@@ -668,6 +1833,7 @@ def parsear_respuesta_causacion(subject: str, body: str):
                 "cuenta_contable": cuenta,
                 "nombre_cuenta": nombre_cuenta,
                 "centro_costo": centro_costo_default,
+                "concepto_servicio": concepto_servicio,
                 "descripcion": nombre_cuenta
             })
 
@@ -724,6 +1890,10 @@ def construir_lineas_respuesta_con_valores_factura(factura: dict, lineas_usuario
         "centro_costo": gasto.get("centro_costo"),
         "debito": valor_gasto,
         "credito": 0,
+        "concepto_servicio": gasto.get("concepto_servicio") or inferir_concepto_servicio(
+            gasto.get("nombre_cuenta"),
+            gasto.get("descripcion")
+        ) or "OTRO",
         "descripcion": gasto.get("descripcion")
     })
 
@@ -737,6 +1907,7 @@ def construir_lineas_respuesta_con_valores_factura(factura: dict, lineas_usuario
             "centro_costo": iva_linea.get("centro_costo"),
             "debito": iva,
             "credito": 0,
+            "concepto_servicio": iva_linea.get("concepto_servicio") or "IVA",
             "descripcion": iva_linea.get("descripcion")
         })
 
@@ -749,6 +1920,7 @@ def construir_lineas_respuesta_con_valores_factura(factura: dict, lineas_usuario
         "centro_costo": cxp.get("centro_costo"),
         "debito": 0,
         "credito": total_pagar,
+        "concepto_servicio": cxp.get("concepto_servicio") or "CXP",
         "descripcion": cxp.get("descripcion")
     })
 
@@ -811,6 +1983,23 @@ def listar_facturas():
         "ok": True,
         "facturas": [dict(row) for row in rows]
     }
+
+
+@app.post("/facturas/{factura_id}/clasificar-conceptos")
+def clasificar_conceptos_factura(factura_id: int, guardar: bool = True):
+    resultado = clasificar_lineas_factura(factura_id, guardar=guardar)
+
+    if not resultado.get("ok"):
+        return JSONResponse(
+            status_code=resultado.get("status_code", 400),
+            content={
+                "ok": False,
+                "error": resultado.get("error", "No fue posible clasificar la factura."),
+                "factura_id": factura_id
+            }
+        )
+
+    return resultado
 
 
 @app.get("/proveedores/listar")
@@ -883,6 +2072,258 @@ def buscar_historico_proveedor(nit: str):
     }
 
 
+@app.post("/historico/cargar-archivo")
+async def cargar_archivo_historico(file: UploadFile = File(...), reemplazar: bool = False):
+    nombre_archivo = file.filename or "historico.xlsx"
+    extension = os.path.splitext(nombre_archivo)[1].lower()
+
+    if extension not in {".xlsx", ".xlsm"}:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "error": "El archivo debe ser .xlsx o .xlsm.",
+                "archivo": nombre_archivo
+            }
+        )
+
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "error": "Falta instalar openpyxl. Ejecuta: python -m pip install -r .\\requirements.txt"
+            }
+        )
+
+    contenido = await file.read()
+
+    try:
+        workbook = load_workbook(
+            filename=BytesIO(contenido),
+            read_only=True,
+            data_only=True
+        )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "error": f"No se pudo leer el Excel: {exc}",
+                "archivo": nombre_archivo
+            }
+        )
+
+    hoja_historico = obtener_hoja_excel(
+        workbook,
+        "Historico_Contable",
+        "Histórico Contable",
+        "Historico Contable"
+    )
+    hoja_mapeo = obtener_hoja_excel(
+        workbook,
+        "Mapeo_ERP",
+        "Mapeo ERP"
+    )
+    hoja_reglas = obtener_hoja_excel(
+        workbook,
+        "Reglas",
+        "Reglas_Concepto_Servicio",
+        "Reglas Concepto Servicio"
+    )
+
+    if hoja_historico is None and hoja_mapeo is None and hoja_reglas is None:
+        hojas_disponibles = workbook.sheetnames
+        workbook.close()
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "error": "El Excel no contiene hojas Historico_Contable, Mapeo_ERP ni Reglas.",
+                "hojas_disponibles": hojas_disponibles
+            }
+        )
+
+    filas_historico = leer_filas_excel(hoja_historico) if hoja_historico else []
+    filas_mapeo = leer_filas_excel(hoja_mapeo) if hoja_mapeo else []
+    filas_reglas = leer_filas_excel(hoja_reglas) if hoja_reglas else []
+
+    historicos = [
+        registro
+        for registro in (
+            construir_historico_desde_excel(fila, nombre_archivo)
+            for fila in filas_historico
+        )
+        if registro
+    ]
+    mapeos = [
+        registro
+        for registro in (
+            construir_mapeo_desde_excel(fila)
+            for fila in filas_mapeo
+        )
+        if registro
+    ]
+    reglas = [
+        registro
+        for registro in (
+            construir_regla_desde_excel(fila)
+            for fila in filas_reglas
+        )
+        if registro
+    ]
+
+    workbook.close()
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    try:
+        if reemplazar:
+            cursor.execute("DELETE FROM contabilizaciones_historicas")
+            cursor.execute("DELETE FROM mapeo_erp")
+            cursor.execute("DELETE FROM reglas_concepto_servicio")
+
+        cursor.executemany("""
+            INSERT INTO contabilizaciones_historicas (
+                proveedor_nit,
+                proveedor_nombre,
+                descripcion,
+                cuenta_contable,
+                nombre_cuenta,
+                centro_costo,
+                debito,
+                credito,
+                cuenta_iva,
+                cuenta_retencion,
+                fuente,
+                fecha_documento
+            )
+            VALUES (
+                :proveedor_nit,
+                :proveedor_nombre,
+                :descripcion,
+                :cuenta_contable,
+                :nombre_cuenta,
+                :centro_costo,
+                :debito,
+                :credito,
+                :cuenta_iva,
+                :cuenta_retencion,
+                :fuente,
+                :fecha_documento
+            )
+        """, historicos)
+
+        cursor.executemany("""
+            INSERT INTO mapeo_erp (
+                erp,
+                proveedor_nit,
+                proveedor_nombre,
+                concepto_servicio,
+                cuenta_contable,
+                nombre_cuenta,
+                item_type_erp,
+                item_code_erp,
+                item_description_erp,
+                document_id_erp,
+                payment_id_erp,
+                tax_id_erp,
+                activo,
+                observacion
+            )
+            VALUES (
+                :erp,
+                :proveedor_nit,
+                :proveedor_nombre,
+                :concepto_servicio,
+                :cuenta_contable,
+                :nombre_cuenta,
+                :item_type_erp,
+                :item_code_erp,
+                :item_description_erp,
+                :document_id_erp,
+                :payment_id_erp,
+                :tax_id_erp,
+                :activo,
+                :observacion
+            )
+        """, mapeos)
+
+        cursor.executemany("""
+            INSERT INTO reglas_concepto_servicio (
+                erp,
+                proveedor_nit,
+                concepto_servicio,
+                palabras_clave,
+                cuenta_contable,
+                nombre_cuenta,
+                item_type_erp,
+                item_code_erp,
+                tax_id_erp,
+                prioridad,
+                activo
+            )
+            VALUES (
+                :erp,
+                :proveedor_nit,
+                :concepto_servicio,
+                :palabras_clave,
+                :cuenta_contable,
+                :nombre_cuenta,
+                :item_type_erp,
+                :item_code_erp,
+                :tax_id_erp,
+                :prioridad,
+                :activo
+            )
+        """, reglas)
+
+        conn.commit()
+
+    except Exception as exc:
+        conn.rollback()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "error": f"No se pudo cargar el historico: {exc}",
+                "archivo": nombre_archivo
+            }
+        )
+
+    finally:
+        conn.close()
+
+    return {
+        "ok": True,
+        "archivo": nombre_archivo,
+        "reemplazar": reemplazar,
+        "hojas_procesadas": {
+            "Historico_Contable": hoja_historico is not None,
+            "Mapeo_ERP": hoja_mapeo is not None,
+            "Reglas": hoja_reglas is not None
+        },
+        "filas_leidas": {
+            "Historico_Contable": len(filas_historico),
+            "Mapeo_ERP": len(filas_mapeo),
+            "Reglas": len(filas_reglas)
+        },
+        "filas_insertadas": {
+            "contabilizaciones_historicas": len(historicos),
+            "mapeo_erp": len(mapeos),
+            "reglas_concepto_servicio": len(reglas)
+        },
+        "filas_omitidas": {
+            "Historico_Contable": len(filas_historico) - len(historicos),
+            "Mapeo_ERP": len(filas_mapeo) - len(mapeos),
+            "Reglas": len(filas_reglas) - len(reglas)
+        }
+    }
+
+
 @app.get("/causacion/proponer/{factura_id}")
 def proponer_causacion(factura_id: int):
     resultado = construir_propuesta_causacion(factura_id)
@@ -913,13 +2354,16 @@ def causar_factura(factura_id: int):
         )
 
     if propuesta.get("requiere_revision"):
+        estado_revision = propuesta.get("estado", "REQUIERE_REVISION")
         return JSONResponse(
             status_code=400,
             content={
                 "ok": False,
-                "estado": "REQUIERE_REVISION",
+                "estado": estado_revision,
                 "mensaje": propuesta.get("mensaje", "La factura requiere revisión antes de causar."),
-                "factura_id": factura_id
+                "factura_id": factura_id,
+                "clasificacion": propuesta.get("clasificacion"),
+                "faltantes_mapeo": propuesta.get("faltantes_mapeo")
             }
         )
 
@@ -1017,9 +2461,10 @@ def causar_factura(factura_id: int):
                 centro_costo,
                 debito,
                 credito,
+                concepto_servicio,
                 descripcion
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             causacion_id,
             linea.get("tipo"),
@@ -1028,6 +2473,7 @@ def causar_factura(factura_id: int):
             linea.get("centro_costo"),
             linea.get("debito"),
             linea.get("credito"),
+            linea.get("concepto_servicio"),
             linea.get("descripcion")
         ))
 
@@ -1185,9 +2631,10 @@ def procesar_respuesta_revision(payload: dict = Body(...)):
                     centro_costo,
                     debito,
                     credito,
+                    concepto_servicio,
                     descripcion
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 causacion_id,
                 linea.get("tipo"),
@@ -1196,6 +2643,7 @@ def procesar_respuesta_revision(payload: dict = Body(...)):
                 linea.get("centro_costo"),
                 linea.get("debito"),
                 linea.get("credito"),
+                linea.get("concepto_servicio"),
                 linea.get("descripcion")
             ))
 
@@ -1621,6 +3069,145 @@ def construir_payload_siigo_compra_desde_causacion(causacion_id: int):
     """, (causacion_id,))
 
     lineas = [dict(row) for row in cursor.fetchall()]
+
+    total_pagar = round(float(factura.get("total_pagar") or 0), 2)
+    iva = round(float(factura.get("iva") or 0), 2)
+
+    lineas_gasto = [
+        l for l in lineas
+        if float(l.get("debito") or 0) > 0
+        and str(l.get("tipo") or "").upper() not in ["IVA", "CXP", "CUENTA_POR_PAGAR"]
+    ]
+
+    if not lineas_gasto:
+        conn.close()
+        raise ValueError("No se encontro una linea de gasto para construir el item SIIGO.")
+
+    items = []
+    mapeos_usados = []
+
+    for linea_gasto in lineas_gasto:
+        concepto = linea_gasto.get("concepto_servicio")
+
+        if not concepto:
+            conn.close()
+            raise ValueError(
+                "REQUIERE_REVISION_CONCEPTO: una linea de gasto no tiene concepto_servicio."
+            )
+
+        mapeo = buscar_mapeo_erp(
+            cursor,
+            factura.get("proveedor_nit"),
+            concepto,
+            linea_gasto.get("cuenta_contable")
+        )
+
+        if not mapeo:
+            conn.close()
+            raise ValueError(
+                f"REQUIERE_MAPEO_ERP: no existe mapeo ERP para proveedor "
+                f"{factura.get('proveedor_nit')} y concepto {concepto}."
+            )
+
+        item_type = mapeo.get("item_type_erp")
+        item_code = mapeo.get("item_code_erp")
+
+        if not item_type or not item_code:
+            conn.close()
+            raise ValueError(
+                f"REQUIERE_MAPEO_ERP: el mapeo ERP {mapeo.get('id')} no tiene "
+                "item_type_erp o item_code_erp."
+            )
+
+        item = {
+            "type": item_type,
+            "code": str(item_code),
+            "description": (
+                mapeo.get("item_description_erp")
+                or linea_gasto.get("descripcion")
+                or linea_gasto.get("nombre_cuenta")
+                or "Gasto factura proveedor"
+            ),
+            "quantity": 1,
+            "price": round(float(linea_gasto.get("debito") or 0), 2)
+        }
+
+        tax_id = mapeo.get("tax_id_erp") or tax_id_iva_19
+
+        if iva > 0 and tax_id:
+            item["taxes"] = [
+                {
+                    "id": int(tax_id)
+                }
+            ]
+
+        items.append(item)
+        mapeos_usados.append({
+            "mapeo_erp_id": mapeo.get("id"),
+            "concepto_servicio": concepto,
+            "item_type_erp": item_type,
+            "item_code_erp": item_code,
+            "document_id_erp": mapeo.get("document_id_erp"),
+            "payment_id_erp": mapeo.get("payment_id_erp"),
+            "tax_id_erp": mapeo.get("tax_id_erp")
+        })
+
+    primer_mapeo = mapeos_usados[0] if mapeos_usados else {}
+    document_id = int(primer_mapeo.get("document_id_erp") or document_id)
+    payment_id = int(primer_mapeo.get("payment_id_erp") or payment_id)
+    conn.close()
+
+    datos_factura_proveedor = separar_prefijo_numero_siigo(
+        factura.get("numero_factura")
+    )
+
+    payload = {
+        "document": {
+            "id": document_id
+        },
+        "date": factura.get("fecha_factura"),
+        "supplier": {
+            "identification": str(factura.get("proveedor_nit")),
+            "branch_office": 0
+        },
+        "provider_invoice": {
+            "prefix": datos_factura_proveedor["prefix"],
+            "number": datos_factura_proveedor["number"]
+        },
+        "tax_included": False,
+        "observations": (
+            f"Factura generada desde FacturasIA. "
+            f"Factura ID: {factura.get('id')}. "
+            f"Causacion ID: {causacion_id}. "
+            f"Factura proveedor: {factura.get('numero_factura')}."
+        ),
+        "items": items,
+        "payments": [
+            {
+                "id": payment_id,
+                "value": total_pagar,
+                "due_date": calcular_fecha_vencimiento_siigo(factura.get("fecha_factura"))
+            }
+        ]
+    }
+
+    return {
+        "payload": payload,
+        "factura": factura,
+        "causacion": causacion,
+        "lineas": lineas,
+        "validacion": {
+            "total_pagar_factura": total_pagar,
+            "iva_factura": iva,
+            "document_id": document_id,
+            "payment_id": payment_id,
+            "tax_id_iva_19": tax_id_iva_19,
+            "mapeos_usados": mapeos_usados,
+            "items_generados": len(items),
+            "modo": "SIMULACION_NO_ENVIADO"
+        }
+    }
+
     conn.close()
 
     total_pagar = round(float(factura.get("total_pagar") or 0), 2)
@@ -1751,6 +3338,47 @@ def siigo_preparar_compra(causacion_id: int):
 def siigo_enviar_compra(causacion_id: int):
     try:
         from siigo_client import SiigoClient
+
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                id,
+                estado,
+                siigo_comprobante_id
+            FROM causaciones
+            WHERE id = ?
+        """, (causacion_id,))
+
+        causacion_row = cursor.fetchone()
+        conn.close()
+
+        if not causacion_row:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "ok": False,
+                    "estado": "CAUSACION_NO_ENCONTRADA",
+                    "mensaje": f"No existe la causacion {causacion_id}.",
+                    "causacion_id": causacion_id
+                }
+            )
+
+        causacion_actual = dict(causacion_row)
+
+        if (
+            causacion_actual.get("estado") == "ENVIADA_SIIGO"
+            or causacion_actual.get("siigo_comprobante_id")
+        ):
+            return {
+                "ok": True,
+                "estado": "YA_ENVIADA_SIIGO",
+                "mensaje": "La causacion ya fue enviada a SIIGO. No se realizo un nuevo envio.",
+                "causacion_id": causacion_id,
+                "siigo_id": causacion_actual.get("siigo_comprobante_id")
+            }
 
         if os.getenv("SIIGO_ENABLED", "false").lower() != "true":
             return JSONResponse(
