@@ -1,0 +1,1210 @@
+{
+  "name": "Causacion Fact Prov Docker",
+  "nodes": [
+    {
+      "parameters": {
+        "format": "resolved",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.1,
+      "position": [
+        -1296,
+        -368
+      ],
+      "id": "0df5e593-877f-460d-9db3-5c3a97407271",
+      "name": "Email Trigger (IMAP)",
+      "credentials": {
+        "imap": {
+          "id": "Yf6bTedYTBzEBR4x",
+          "name": "IMAP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "0b97c08e-215e-47f4-b0c6-5cceec43b8ae",
+              "leftValue": "={{ $json.procesable }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -272,
+        -208
+      ],
+      "id": "23a3b479-41e9-4fb4-ab64-ec86651e68ab",
+      "name": "¿Es procesable?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://facturas-api:8000/facturas/procesar-adjunto",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "factura_file"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -64,
+        -224
+      ],
+      "id": "30141958-ce83-4fc2-a23d-e5fe4371f5f3",
+      "name": "Procesar factura en Python"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d2f55bb2-606d-45e6-a270-93ce2016d056",
+              "leftValue": "={{ $json.duplicada }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        128,
+        -224
+      ],
+      "id": "f3ef2504-68a3-4fc0-a2b9-7469e3fbbcde",
+      "name": "¿Factura duplicada?"
+    },
+    {
+      "parameters": {
+        "fromEmail": "recepciontest@biasolutions.co",
+        "toEmail": "={{ $('Variables').item.json.correo_destino }}",
+        "subject": "=Factura duplicada - {{ $json.factura.numero_factura }}",
+        "html": "=<h3>Factura duplicada detectada</h3>\n\n<p>La factura no fue enviada al flujo de causación porque ya existe en la base de datos.</p>\n\n<p><b>Proveedor:</b> {{ $json.factura.proveedor_nombre }}</p>\n<p><b>NIT Proveedor:</b> {{ $json.factura.proveedor_nit }}</p>\n<p><b>Número factura:</b> {{ $json.factura.numero_factura }}</p>\n<p><b>Fecha:</b> {{ $json.factura.fecha_factura }}</p>\n<p><b>Total:</b> {{ $json.factura.total_pagar }}</p>\n<p><b>CUFE:</b> {{ $json.factura.cufe }}</p>\n\n<hr>\n\n<p><b>ID registrado:</b> {{ $json.factura_id }}</p>\n<p><b>Archivo recibido:</b> {{ $json.nombre_original }}</p>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        336,
+        -384
+      ],
+      "id": "ee7eb915-9d0a-452e-90bd-387dd4721af1",
+      "name": "Notificar factura duplicada",
+      "webhookId": "d560bd32-537c-463b-a3de-17385b6d5659",
+      "credentials": {
+        "smtp": {
+          "id": "3c5S6AQq2Co2Uy1k",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=http://facturas-api:8000/historico/proveedor/{{ $json.factura.proveedor_nit }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        336,
+        0
+      ],
+      "id": "6ef5cc66-c08a-49cc-8901-3b68bb7fe41d",
+      "name": "Consultar histórico proveedor"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://facturas-api:8000/causacion/causar/{{ $('Procesar factura en Python').item.json.factura_id }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        528,
+        0
+      ],
+      "id": "0bacdc68-c2ce-490e-ba9d-b9f8dae1bdd5",
+      "name": "Causar factura automáticamente"
+    },
+    {
+      "parameters": {
+        "fromEmail": "recepciontest@biasolutions.co",
+        "toEmail": "={{ $('Variables').item.json.correo_destino }}",
+        "subject": "=Factura causada automáticamente - {{ $json.numero_factura }}",
+        "html": "=<h3>Factura causada automáticamente</h3>\n\n<p>La factura fue procesada y causada automáticamente en modo simulación.</p>\n\n<p><b>Estado:</b> {{ $json.estado }}</p>\n<p><b>Proveedor:</b> {{ $json.proveedor_nombre }}</p>\n<p><b>NIT:</b> {{ $json.proveedor_nit }}</p>\n<p><b>Número factura:</b> {{ $json.numero_factura }}</p>\n<p><b>Factura ID:</b> {{ $json.factura_id }}</p>\n<p><b>Causación ID:</b> {{ $json.causacion_id }}</p>\n<p><b>Confianza:</b> {{ $json.confianza }}%</p>\n\n<hr>\n\n<h4>Resumen contable</h4>\n\n<p><b>Total débito:</b> {{ $json.total_debito }}</p>\n<p><b>Total crédito:</b> {{ $json.total_credito }}</p>\n\n<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\">\n  <thead>\n    <tr>\n      <th>Tipo</th>\n      <th>Concepto</th>\n      <th>Cuenta</th>\n      <th>Nombre cuenta</th>\n      <th>Centro costo</th>\n      <th>Débito</th>\n      <th>Crédito</th>\n    </tr>\n  </thead>\n  <tbody>\n    {{ $json.lineas.map(l => `\n      <tr>\n        <td>${l.tipo}</td>\n        <td>${l.concepto_servicio || ''}</td>\n        <td>${l.cuenta_contable}</td>\n        <td>${l.nombre_cuenta}</td>\n        <td>${l.centro_costo || ''}</td>\n        <td>${l.debito}</td>\n        <td>${l.credito}</td>\n      </tr>\n    `).join('') }}\n  </tbody>\n</table>\n\n<hr>\n\n<p><b>Mensaje:</b> {{ $json.mensaje }}</p>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        928,
+        -144
+      ],
+      "id": "d3330a69-a20f-456d-9ab5-f79750ac40f5",
+      "name": "Notificar causación automática",
+      "webhookId": "ef7596e0-1059-46f9-800e-f2c4aa96c29d",
+      "credentials": {
+        "smtp": {
+          "id": "3c5S6AQq2Co2Uy1k",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "eb687e9d-984d-4285-8c06-65a78182ecaa",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        736,
+        0
+      ],
+      "id": "fffa6248-e865-45fc-b90b-5bff004e543f",
+      "name": "¿Causación exitosa?"
+    },
+    {
+      "parameters": {
+        "fromEmail": "recepciontest@biasolutions.co",
+        "toEmail": "={{ $('Variables').item.json.correo_destino }}",
+        "subject": "=Factura requiere revisión - {{ $json.estado || 'REQUIERE_REVISION' }} - Factura ID {{ $json.factura_id }}",
+        "html": "=<h3>Factura requiere revisión manual</h3>\n\n<p>La factura fue procesada, pero no pudo ser causada automáticamente.</p>\n\n<p><b>Estado:</b> {{ $json.estado }}</p>\n<p><b>Mensaje:</b> {{ $json.mensaje }}</p>\n<p><b>Factura ID:</b> {{ $json.factura_id }}</p>\n\n{{ $json.clasificacion ? `\n<hr>\n<h4>Clasificación de conceptos</h4>\n<p><b>Total líneas:</b> ${$json.clasificacion.total_lineas}</p>\n<p><b>Líneas clasificadas:</b> ${$json.clasificacion.lineas_clasificadas}</p>\n<p><b>Líneas pendientes:</b> ${$json.clasificacion.lineas_pendientes}</p>\n<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\">\n  <thead>\n    <tr>\n      <th>Descripción</th>\n      <th>Concepto</th>\n      <th>Fuente</th>\n      <th>Confianza</th>\n    </tr>\n  </thead>\n  <tbody>\n    ${($json.clasificacion.clasificaciones || []).map(l => `\n      <tr>\n        <td>${l.descripcion || ''}</td>\n        <td>${l.concepto_servicio || 'PENDIENTE'}</td>\n        <td>${l.clasificacion_fuente || ''}</td>\n        <td>${l.clasificacion_confianza || 0}</td>\n      </tr>\n    `).join('')}\n  </tbody>\n</table>\n` : '' }}\n\n{{ $json.faltantes_mapeo ? `\n<hr>\n<h4>Mapeos ERP pendientes</h4>\n<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\">\n  <thead>\n    <tr>\n      <th>Concepto</th>\n      <th>Valor</th>\n      <th>Motivo</th>\n    </tr>\n  </thead>\n  <tbody>\n    ${($json.faltantes_mapeo || []).map(m => `\n      <tr>\n        <td>${m.concepto_servicio || ''}</td>\n        <td>${m.valor || ''}</td>\n        <td>${m.motivo || ''}</td>\n      </tr>\n    `).join('')}\n  </tbody>\n</table>\n` : '' }}\n\n<hr>\n\n<p>Para causar esta factura, responda este correo conservando el encabezado y editando la tabla:</p>\n\n<pre>\n#CAUSAR_FACTURA\n\nFACTURA_ID={{ $json.factura_id }}\nCENTRO_COSTO=ADMIN\n\nTIPO     CUENTA      NOMBRE_CUENTA                         CONCEPTO\nGASTO    61553001    Servicios TI                           HOSTING\nIVA      24081501    IVA descontable servicios 19%          IVA\nCXP      23359501    Otros proveedores                      CXP\n</pre>\n\n<p>Tambien se acepta copiar la tabla separada por tabuladores desde Excel.</p>\n\n<hr>\n\n<p><b>Conceptos sugeridos:</b></p>\n\n<table border=\"1\" cellpadding=\"5\" cellspacing=\"0\">\n  <thead>\n    <tr>\n      <th>Concepto</th>\n      <th>Uso típico</th>\n    </tr>\n  </thead>\n  <tbody>\n    <tr><td>HOSTING</td><td>Hosting, hospedaje web</td></tr>\n    <tr><td>DOMINIO</td><td>Dominios y renovaciones</td></tr>\n    <tr><td>CORREO</td><td>Correo, email, Google Workspace, Office 365</td></tr>\n    <tr><td>CERTIFICADO_SSL</td><td>SSL, TLS, certificados</td></tr>\n    <tr><td>LICENCIA</td><td>Licencias y suscripciones</td></tr>\n    <tr><td>SERVIDOR</td><td>Servidor, VPS, cloud</td></tr>\n    <tr><td>DESARROLLO_SOFTWARE</td><td>Software, desarrollo, programación</td></tr>\n    <tr><td>SERVICIOS_TI</td><td>Servicios de tecnología generales</td></tr>\n    <tr><td>TELECOMUNICACIONES</td><td>Internet, telefonía, televisión, cable</td></tr>\n    <tr><td>SERVICIOS_PUBLICOS</td><td>Energía, acueducto, aseo, alcantarillado, alumbrado</td></tr>\n    <tr><td>MANTENIMIENTO_EQUIPO</td><td>Mantenimiento de equipos</td></tr>\n    <tr><td>PAPELERIA</td><td>Papelería, útiles, fotocopias</td></tr>\n    <tr><td>COMBUSTIBLE</td><td>Gasolina, diésel, lubricantes</td></tr>\n    <tr><td>REGISTRO_MERCANTIL</td><td>Cámara de comercio, registro mercantil</td></tr>\n    <tr><td>EDUCATIVO</td><td>Cursos, capacitación, educación</td></tr>\n    <tr><td>ASESORIA</td><td>Asesoría o consultoría no TI</td></tr>\n    <tr><td>IVA</td><td>Línea de IVA</td></tr>\n    <tr><td>CXP</td><td>Cuenta por pagar</td></tr>\n  </tbody>\n</table>\n\n<p>Listado completo disponible en Swagger: <code>GET /clasificaciones/conceptos</code></p>\n\n<hr>\n\n<p><b>Instrucciones:</b></p>\n\n<ul>\n  <li>Indique tipo, cuenta, nombre de cuenta y concepto de servicio en la tabla.</li>\n  <li>No escriba valores manuales; el sistema toma débitos, créditos, IVA y CXP desde el XML/ZIP.</li>\n  <li>Use conceptos como HOSTING, DOMINIO, CORREO, CERTIFICADO_SSL, LICENCIA, SERVIDOR, TELECOMUNICACIONES, SERVICIOS_PUBLICOS, IVA o CXP.</li>\n  <li>Si el estado es REQUIERE_MAPEO_ERP, cree o ajuste el mapeo ERP antes de reenviar.</li>\n</ul>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        928,
+        96
+      ],
+      "id": "1003aaf7-5683-4fcf-9475-905f4b1274c0",
+      "name": "Notificar revisión manual",
+      "webhookId": "21042ec7-8e71-4ff3-a292-08dbf9492508",
+      "credentials": {
+        "smtp": {
+          "id": "3c5S6AQq2Co2Uy1k",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const output = [];\n\nfor (const item of $input.all()) {\n  const binary = item.binary || {};\n\n  let zipFile = null;\n  let xmlFile = null;\n  let pdfFile = null;\n\n  for (const key of Object.keys(binary)) {\n    const file = binary[key];\n    const fileName = (file.fileName || '').toLowerCase();\n    const mimeType = (file.mimeType || '').toLowerCase();\n\n    if (fileName.endsWith('.zip') || mimeType.includes('zip')) {\n      zipFile = key;\n    }\n\n    if (fileName.endsWith('.xml') || mimeType.includes('xml')) {\n      xmlFile = key;\n    }\n\n    if (fileName.endsWith('.pdf') || mimeType.includes('pdf')) {\n      pdfFile = key;\n    }\n  }\n\n  const selectedKey = zipFile || xmlFile;\n  const tipoAdjunto = zipFile ? 'zip' : (xmlFile ? 'xml' : null);\n\n  const newBinary = { ...binary };\n\n  if (selectedKey) {\n    newBinary.factura_file = binary[selectedKey];\n  }\n\n  output.push({\n    json: {\n      subject: item.json.subject,\n      from: item.json.from,\n      date: item.json.date,\n\n      tiene_zip: !!zipFile,\n      tiene_xml: !!xmlFile,\n      tiene_pdf: !!pdfFile,\n\n      zip_binary_key: zipFile,\n      xml_binary_key: xmlFile,\n      pdf_binary_key: pdfFile,\n\n      selected_binary_key: selectedKey,\n      tipo_adjunto: tipoAdjunto,\n      nombre_adjunto: selectedKey ? binary[selectedKey].fileName : null,\n      total_adjuntos: Object.keys(binary).length,\n\n      procesable: !!selectedKey\n    },\n    binary: newBinary\n  });\n}\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -464,
+        -208
+      ],
+      "id": "76a277c5-8230-4007-aaeb-694b6054f06e",
+      "name": "Detectar Adjuntos Factura"
+    },
+    {
+      "parameters": {
+        "jsCode": "const output = [];\n\nfor (const item of $input.all()) {\n  const subject = item.json.subject || '';\n  const text = item.json.text || '';\n  const html = item.json.html || '';\n  const body = text || html || '';\n\n  const subjectUpper = subject.toUpperCase();\n  const bodyUpper = body.toUpperCase();\n\n  let tipo_correo = 'FACTURA';\n\n  if (\n    bodyUpper.includes('#CAUSAR_FACTURA') ||\n    subjectUpper.includes('FACTURA REQUIERE REVISIÓN') ||\n    subjectUpper.includes('FACTURA REQUIERE REVISION')\n  ) {\n    tipo_correo = 'RESPUESTA_REVISION';\n  }\n\n  output.push({\n    json: {\n      ...item.json,\n      tipo_correo,\n      subject,\n      body_text: body\n    },\n    binary: item.binary\n  });\n}\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -944,
+        -368
+      ],
+      "id": "d55d1a96-e429-4a84-af68-7136b2f302ca",
+      "name": "Clasificar correo"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "58660302-4239-4be9-8ddd-e9c3b361cbfc",
+              "leftValue": "={{ $json.tipo_correo }}",
+              "rightValue": "RESPUESTA_REVISION",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -752,
+        -368
+      ],
+      "id": "33b4285a-bc5c-4987-a9a2-d601cc17017a",
+      "name": "¿Es respuesta revisión?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://facturas-api:8000/revision/procesar-respuesta",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "subject",
+              "value": "={{ $json.subject }}"
+            },
+            {
+              "name": "from",
+              "value": "={{ ($json.from && $json.from.text) ? $json.from.text : ($json.from || '') }}"
+            },
+            {
+              "name": "body",
+              "value": "={{ $json.body_text }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -432,
+        -608
+      ],
+      "id": "b720b2ac-631e-4d02-9a4c-46bdcd4a8c78",
+      "name": "Procesar respuesta revisión"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "69d8be4c-90aa-4c64-8068-b4e30ad6a4a0",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -256,
+        -608
+      ],
+      "id": "02914758-e518-4284-828b-ccc2eb7645a3",
+      "name": "¿Respuesta procesada?"
+    },
+    {
+      "parameters": {
+        "fromEmail": "recepciontest@biasolutions.co",
+        "toEmail": "={{ $('Variables').item.json.correo_destino }}",
+        "subject": "=Factura causada desde respuesta manual - {{ $json.numero_factura }}",
+        "html": "=<h3>Factura causada correctamente</h3>\n\n<p>La respuesta manual fue procesada correctamente.</p>\n\n<p><b>Estado:</b> {{ $json.estado }}</p>\n<p><b>Mensaje:</b> {{ $json.mensaje }}</p>\n<p><b>Factura ID:</b> {{ $json.factura_id }}</p>\n<p><b>Causación ID:</b> {{ $json.causacion_id }}</p>\n<p><b>Proveedor:</b> {{ $json.proveedor_nombre }}</p>\n<p><b>NIT:</b> {{ $json.proveedor_nit }}</p>\n<p><b>Número factura:</b> {{ $json.numero_factura }}</p>\n\n<hr>\n\n<p><b>Total débito:</b> {{ $json.total_debito }}</p>\n<p><b>Total crédito:</b> {{ $json.total_credito }}</p>\n\n<p>La contabilización también fue guardada como histórico para próximas facturas del proveedor.</p>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -48,
+        -736
+      ],
+      "id": "299d31d9-9bc2-4258-9954-e8c201c11fb7",
+      "name": "Notificar respuesta procesada",
+      "webhookId": "bf76027d-4c37-4985-989f-10b1f1e9aa8b",
+      "credentials": {
+        "smtp": {
+          "id": "3c5S6AQq2Co2Uy1k",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "recepciontest@biasolutions.co",
+        "toEmail": "={{ $('Variables').item.json.correo_destino }}",
+        "subject": "Error procesando respuesta manual",
+        "html": "=<h3>No se pudo procesar la respuesta manual</h3>\n\n<p><b>Estado:</b> {{ $json.estado }}</p>\n<p><b>Mensaje:</b> {{ $json.mensaje }}</p>\n\n<hr>\n\n<p>Revise que la respuesta tenga este formato:</p>\n\n<pre>\n#CAUSAR_FACTURA\n\nFACTURA_ID=5\nCENTRO_COSTO=ADMIN\n\nTIPO     CUENTA      NOMBRE_CUENTA                         CONCEPTO\nGASTO    61553001    Servicios TI                           HOSTING\nIVA      24081501    IVA descontable servicios 19%          IVA\nCXP      23359501    Otros proveedores                      CXP\n</pre>\n\n<p>Los valores contables se toman desde el XML/ZIP de la factura, no desde la respuesta manual.</p>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -48,
+        -480
+      ],
+      "id": "b29ddd79-c65d-4699-b3ef-9c6806c07e15",
+      "name": "Notificar error respuesta",
+      "webhookId": "1836d9b2-759e-4b38-9fde-0f9f040effba",
+      "credentials": {
+        "smtp": {
+          "id": "3c5S6AQq2Co2Uy1k",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ae6cf859-3eb5-4955-b50c-a77985e6dadd",
+              "name": "correo_destino",
+              "value": "cmontenegrocam@gmail.com",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1120,
+        -368
+      ],
+      "id": "902fc160-5723-46d7-ab16-47846658ff92",
+      "name": "Variables"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "8d74fe3f-9219-457a-9828-bdf8ac7cfe29",
+              "leftValue": "={{ $json.ok !== false }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        96,
+        -224
+      ],
+      "id": "7e9bc1b0-2109-4c6a-8260-9dbe41cb49ba",
+      "name": "¿Factura procesada?"
+    },
+    {
+      "parameters": {
+        "fromEmail": "recepciontest@biasolutions.co",
+        "toEmail": "={{ $('Variables').item.json.correo_destino }}",
+        "subject": "=Factura no procesada - {{ $json.estado || 'VALIDACION' }}",
+        "html": "=<h3>Factura no procesada</h3>\n\n<p>El backend rechazo la factura antes de causarla.</p>\n\n<p><b>Estado:</b> {{ $json.estado }}</p>\n<p><b>Mensaje:</b> {{ $json.mensaje || $json.error }}</p>\n<p><b>Archivo:</b> {{ $json.nombre_original }}</p>\n\n<hr>\n\n<p><b>Proveedor:</b> {{ $json.factura?.proveedor_nombre }}</p>\n<p><b>NIT proveedor:</b> {{ $json.factura?.proveedor_nit }}</p>\n<p><b>Cliente/Receptor:</b> {{ $json.factura?.cliente_nombre }}</p>\n<p><b>NIT cliente/receptor:</b> {{ $json.factura?.cliente_nit }}</p>\n<p><b>NIT normalizado:</b> {{ $json.cliente_nit_normalizado }}</p>\n<p><b>NITs permitidos:</b> {{ ($json.nits_permitidos || []).join(', ') }}</p>\n\n<p>Si esta factura sí debe contabilizarse, agregue ese NIT en <code>NITS_CLIENTE_PERMITIDOS</code> del backend y vuelva a reenviar el correo.</p>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        304,
+        -96
+      ],
+      "id": "7cd6f1b7-8eec-43e7-a4a3-c3ac8ad7e6d9",
+      "name": "Notificar factura rechazada",
+      "webhookId": "f66f8196-78bd-49d6-9191-9b06f4d900a4",
+      "credentials": {
+        "smtp": {
+          "id": "3c5S6AQq2Co2Uy1k",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const correo = $('Clasificar correo').item.json || {};\nconst from = correo.from || '';\nconst fromText = from && from.text ? from.text : from;\nconst headers = correo.headers || {};\n\nreturn [{\n  json: {\n    factura_id: $json.factura_id,\n    causacion_id: $json.causacion_id,\n    estado: $json.estado,\n    proveedor_nit: $json.proveedor_nit,\n    proveedor_nombre: $json.proveedor_nombre,\n    numero_factura: $json.numero_factura,\n    email_subject: correo.subject || '',\n    email_from: fromText || '',\n    email_message_id_header: correo.messageId || correo.message_id || headers['message-id'] || headers.messageId || '',\n    email_uid: correo.attributes?.uid || '',\n    email_source_mailbox: 'INBOX',\n    email_archive_mailbox: 'Facturas Procesadas',\n    api_base_url: 'http://facturas-api:8000'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1216,
+        -128
+      ],
+      "id": "a8dbf0bd-f22a-47af-a2d4-1fb27449951c",
+      "name": "Preparar postproceso integrado"
+    },
+    {
+      "parameters": {
+        "url": "={{ ($json.api_base_url || 'http://facturas-api:8000') + '/facturas/' + $json.factura_id + '/detalle' }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1560,
+        -20
+      ],
+      "id": "57836351-8f21-41e6-8a47-5de8443929cf",
+      "name": "Obtener detalle factura"
+    },
+    {
+      "parameters": {
+        "jsCode": "const detalle = $input.first().json;\nconst factura = detalle.factura || {};\nconst causacion = detalle.causacion || {};\nconst postproceso = $node['Preparar postproceso integrado'].json || {};\n\nconst meses = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];\nconst fecha = factura.fecha_factura || new Date().toISOString().slice(0, 10);\nconst [year, month] = fecha.split('-');\nconst monthIndex = Math.max(0, Number(month || '1') - 1);\n\nfunction cleanPathPart(value, fallback) {\n  return String(value || fallback || '')\n    .normalize('NFD')\n    .replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[<>:\"/\\\\|?*]+/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction graphPath(path) {\n  return path.split('/').map(encodeURIComponent).join('/');\n}\n\nconst rootFolder = '2. Contabilidad';\nconst receivedFolder = 'Facturas Recibidas';\nconst proveedor = cleanPathPart(factura.proveedor_nombre, 'Proveedor');\nconst numero = cleanPathPart(factura.numero_factura || factura.id, 'Factura');\nconst yearFolder = year;\nconst monthFolder = month + '.' + meses[monthIndex] + '-' + year;\nconst folderPath = [rootFolder, receivedFolder, yearFolder, monthFolder, proveedor].join('/');\nconst fileName = numero + '.pdf';\nconst oneDrivePath = folderPath + '/' + fileName;\nconst apiBaseUrl = postproceso.api_base_url || 'http://facturas-api:8000';\n\nreturn [{\n  json: {\n    factura_id: factura.id,\n    causacion_id: causacion.id || postproceso.causacion_id,\n    factura,\n    causacion,\n    rootFolder,\n    receivedFolder,\n    yearFolder,\n    monthFolder,\n    proveedorFolder: proveedor,\n    folderPath,\n    fileName,\n    oneDrivePath,\n    pdfDownloadUrl: apiBaseUrl + '/facturas/' + factura.id + '/pdf',\n    imapArchiveUrl: apiBaseUrl + '/correo/archivar-imap',\n    graphRootChildrenUrl: 'https://graph.microsoft.com/v1.0/me/drive/root/children',\n    graphReceivedChildrenUrl: 'https://graph.microsoft.com/v1.0/me/drive/root:/' + graphPath(rootFolder) + ':/children',\n    graphYearChildrenUrl: 'https://graph.microsoft.com/v1.0/me/drive/root:/' + graphPath([rootFolder, receivedFolder].join('/')) + ':/children',\n    graphMonthChildrenUrl: 'https://graph.microsoft.com/v1.0/me/drive/root:/' + graphPath([rootFolder, receivedFolder, yearFolder].join('/')) + ':/children',\n    graphProviderChildrenUrl: 'https://graph.microsoft.com/v1.0/me/drive/root:/' + graphPath([rootFolder, receivedFolder, yearFolder, monthFolder].join('/')) + ':/children',\n    graphUploadUrl: 'https://graph.microsoft.com/v1.0/me/drive/root:/' + graphPath(oneDrivePath) + ':/content',\n    email_subject: postproceso.email_subject || '',\n    email_from: postproceso.email_from || '',\n    email_uid: postproceso.email_uid || '',\n    email_message_id_header: postproceso.email_message_id_header || '',\n    email_source_mailbox: postproceso.email_source_mailbox || 'INBOX',\n    email_archive_mailbox: postproceso.email_archive_mailbox || 'Facturas Procesadas'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        -20
+      ],
+      "id": "5b3b8481-1499-4c58-91cf-519a38683594",
+      "name": "Construir ruta OneDrive"
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "method": "POST",
+        "url": "={{ $json.graphRootChildrenUrl }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"name\": $json.rootFolder,\n  \"folder\": {},\n  \"@microsoft.graph.conflictBehavior\": \"fail\"\n} }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2080,
+        -200
+      ],
+      "id": "3fd33420-70e4-4186-b57e-f6fe545273fd",
+      "name": "Crear carpeta raiz OneDrive",
+      "credentials": {
+        "oAuth2Api": {
+          "id": "REPLACE_MICROSOFT_GRAPH_OAUTH2",
+          "name": "Microsoft Graph OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "method": "POST",
+        "url": "={{ $node['Construir ruta OneDrive'].json.graphReceivedChildrenUrl }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"name\": $node['Construir ruta OneDrive'].json.receivedFolder,\n  \"folder\": {},\n  \"@microsoft.graph.conflictBehavior\": \"fail\"\n} }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2320,
+        -200
+      ],
+      "id": "fbb724e1-36ab-44d2-b17c-e67db6ae8d85",
+      "name": "Crear carpeta Facturas Recibidas",
+      "credentials": {
+        "oAuth2Api": {
+          "id": "REPLACE_MICROSOFT_GRAPH_OAUTH2",
+          "name": "Microsoft Graph OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "method": "POST",
+        "url": "={{ $node['Construir ruta OneDrive'].json.graphYearChildrenUrl }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"name\": $node['Construir ruta OneDrive'].json.yearFolder,\n  \"folder\": {},\n  \"@microsoft.graph.conflictBehavior\": \"fail\"\n} }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2560,
+        -200
+      ],
+      "id": "c5b4720b-ab2c-4b7c-9148-7404323780fb",
+      "name": "Crear carpeta aÃ±o",
+      "credentials": {
+        "oAuth2Api": {
+          "id": "REPLACE_MICROSOFT_GRAPH_OAUTH2",
+          "name": "Microsoft Graph OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "method": "POST",
+        "url": "={{ $node['Construir ruta OneDrive'].json.graphMonthChildrenUrl }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"name\": $node['Construir ruta OneDrive'].json.monthFolder,\n  \"folder\": {},\n  \"@microsoft.graph.conflictBehavior\": \"fail\"\n} }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2800,
+        -200
+      ],
+      "id": "2e209e30-30ec-4293-9d58-a83cae19c0ed",
+      "name": "Crear carpeta mes",
+      "credentials": {
+        "oAuth2Api": {
+          "id": "REPLACE_MICROSOFT_GRAPH_OAUTH2",
+          "name": "Microsoft Graph OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "method": "POST",
+        "url": "={{ $node['Construir ruta OneDrive'].json.graphProviderChildrenUrl }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"name\": $node['Construir ruta OneDrive'].json.proveedorFolder,\n  \"folder\": {},\n  \"@microsoft.graph.conflictBehavior\": \"fail\"\n} }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3040,
+        -200
+      ],
+      "id": "405d634d-4079-4f6f-b15d-7cfac8efc561",
+      "name": "Crear carpeta proveedor",
+      "credentials": {
+        "oAuth2Api": {
+          "id": "REPLACE_MICROSOFT_GRAPH_OAUTH2",
+          "name": "Microsoft Graph OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $node['Construir ruta OneDrive'].json.pdfDownloadUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "pdf_file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3280,
+        -200
+      ],
+      "id": "13978e69-2eb8-4457-93fe-27d5a7f85e17",
+      "name": "Descargar PDF factura"
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "method": "PUT",
+        "url": "={{ $node['Construir ruta OneDrive'].json.graphUploadUrl }}",
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "pdf_file",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3520,
+        -200
+      ],
+      "id": "1db84867-d957-4c89-abe8-5f9316ee47a1",
+      "name": "Subir PDF a OneDrive",
+      "credentials": {
+        "oAuth2Api": {
+          "id": "REPLACE_MICROSOFT_GRAPH_OAUTH2",
+          "name": "Microsoft Graph OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $node['Construir ruta OneDrive'].json.imapArchiveUrl }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"email_uid\": $node['Construir ruta OneDrive'].json.email_uid,\n  \"email_message_id_header\": $node['Construir ruta OneDrive'].json.email_message_id_header,\n  \"source_mailbox\": $node['Construir ruta OneDrive'].json.email_source_mailbox,\n  \"target_mailbox\": $node['Construir ruta OneDrive'].json.email_archive_mailbox\n} }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3760,
+        -200
+      ],
+      "id": "3d569ac0-51c6-4682-af99-8d125f81299d",
+      "name": "Archivar correo por IMAP"
+    },
+    {
+      "parameters": {
+        "jsCode": "const imapArchive = $json || {};\n\nreturn [{\n  json: {\n    ...$node['Construir ruta OneDrive'].json,\n    oneDriveUpload: $node['Subir PDF a OneDrive'].json,\n    imapArchive,\n    correo_archivado: imapArchive.ok === true\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4000,
+        -200
+      ],
+      "id": "5d6c748c-a096-4719-996f-8f265471799e",
+      "name": "Preparar resultado postproceso"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    ok: true,\n    factura_id: $json.factura_id,\n    causacion_id: $json.causacion_id,\n    oneDrivePath: $json.oneDrivePath,\n    correo_archivado: $json.correo_archivado,\n    imapArchive: $json.imapArchive,\n    mensaje: $json.correo_archivado\n      ? 'PDF subido a OneDrive y correo movido por IMAP.'\n      : 'PDF subido a OneDrive. No se pudo confirmar el movimiento del correo por IMAP.'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4720,
+        -200
+      ],
+      "id": "a125e814-48b9-420b-84f9-99d98da66e7e",
+      "name": "Postproceso completado"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Email Trigger (IMAP)": {
+      "main": [
+        [
+          {
+            "node": "Variables",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es procesable?": {
+      "main": [
+        [
+          {
+            "node": "Procesar factura en Python",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Procesar factura en Python": {
+      "main": [
+        [
+          {
+            "node": "¿Factura procesada?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Factura duplicada?": {
+      "main": [
+        [
+          {
+            "node": "Notificar factura duplicada",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Consultar histórico proveedor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar histórico proveedor": {
+      "main": [
+        [
+          {
+            "node": "Causar factura automáticamente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Causar factura automáticamente": {
+      "main": [
+        [
+          {
+            "node": "¿Causación exitosa?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Causación exitosa?": {
+      "main": [
+        [
+          {
+            "node": "Notificar causación automática",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Preparar postproceso integrado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notificar revisión manual",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detectar Adjuntos Factura": {
+      "main": [
+        [
+          {
+            "node": "¿Es procesable?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clasificar correo": {
+      "main": [
+        [
+          {
+            "node": "¿Es respuesta revisión?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es respuesta revisión?": {
+      "main": [
+        [
+          {
+            "node": "Procesar respuesta revisión",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Detectar Adjuntos Factura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Procesar respuesta revisión": {
+      "main": [
+        [
+          {
+            "node": "¿Respuesta procesada?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Respuesta procesada?": {
+      "main": [
+        [
+          {
+            "node": "Notificar respuesta procesada",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Preparar postproceso integrado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notificar error respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Variables": {
+      "main": [
+        [
+          {
+            "node": "Clasificar correo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notificar causación automática": {
+      "main": [
+        []
+      ]
+    },
+    "Notificar respuesta procesada": {
+      "main": [
+        []
+      ]
+    },
+    "¿Factura procesada?": {
+      "main": [
+        [
+          {
+            "node": "¿Factura duplicada?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notificar factura rechazada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obtener detalle factura": {
+      "main": [
+        [
+          {
+            "node": "Construir ruta OneDrive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Construir ruta OneDrive": {
+      "main": [
+        [
+          {
+            "node": "Crear carpeta raiz OneDrive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear carpeta raiz OneDrive": {
+      "main": [
+        [
+          {
+            "node": "Crear carpeta Facturas Recibidas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear carpeta Facturas Recibidas": {
+      "main": [
+        [
+          {
+            "node": "Crear carpeta aÃ±o",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear carpeta aÃ±o": {
+      "main": [
+        [
+          {
+            "node": "Crear carpeta mes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear carpeta mes": {
+      "main": [
+        [
+          {
+            "node": "Crear carpeta proveedor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear carpeta proveedor": {
+      "main": [
+        [
+          {
+            "node": "Descargar PDF factura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descargar PDF factura": {
+      "main": [
+        [
+          {
+            "node": "Subir PDF a OneDrive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Subir PDF a OneDrive": {
+      "main": [
+        [
+          {
+            "node": "Archivar correo por IMAP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Archivar correo por IMAP": {
+      "main": [
+        [
+          {
+            "node": "Preparar resultado postproceso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar resultado postproceso": {
+      "main": [
+        [
+          {
+            "node": "Postproceso completado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar postproceso integrado": {
+      "main": [
+        [
+          {
+            "node": "Obtener detalle factura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "2dbb1c57-cbbb-401f-b8cb-49e6283bcc19",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e1b2ce25c3912cdaa5abf140d7a72664de4fca0a68a060e2a21642af3ac9aac4"
+  },
+  "nodeGroups": [],
+  "id": "Nlg3whaDbWv5HvRk",
+  "tags": []
+}

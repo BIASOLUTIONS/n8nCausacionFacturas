@@ -17,7 +17,7 @@ load_dotenv()
 
 app = FastAPI(title="Facturas IA API")
 
-BASE_PATH = r"C:\FacturasIA"
+BASE_PATH = os.getenv("BASE_PATH", r"C:\FacturasIA")
 ADJUNTOS_PATH = os.path.join(BASE_PATH, "adjuntos")
 PROCESADAS_PATH = os.path.join(BASE_PATH, "procesadas")
 ERRORES_PATH = os.path.join(BASE_PATH, "errores")

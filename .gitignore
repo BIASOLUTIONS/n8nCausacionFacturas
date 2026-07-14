@@ -5,6 +5,9 @@ __pycache__/
 
 # Variables sensibles
 .env
+.env.local
+.env.docker.local
+python-api/.env.docker.local
 
 # Base de datos local
 facturas_ai.db

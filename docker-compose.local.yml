@@ -1,0 +1,37 @@
+services:
+  facturas-api:
+    build:
+      context: ./python-api
+    container_name: facturas-api-local
+    restart: unless-stopped
+    env_file:
+      - ./python-api/.env.docker.local
+    volumes:
+      - facturas_data:/data/facturasia
+    ports:
+      - "8000:8000"
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:stable
+    container_name: n8n-local
+    restart: unless-stopped
+    environment:
+      - TZ=America/Bogota
+      - GENERIC_TIMEZONE=America/Bogota
+      - N8N_HOST=localhost
+      - N8N_PROTOCOL=http
+      - N8N_PORT=5678
+      - WEBHOOK_URL=http://localhost:5678/
+      - N8N_EDITOR_BASE_URL=http://localhost:5678/
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_RUNNERS_ENABLED=true
+    volumes:
+      - n8n_data:/home/node/.n8n
+    ports:
+      - "5678:5678"
+    depends_on:
+      - facturas-api
+
+volumes:
+  n8n_data:
+  facturas_data:
