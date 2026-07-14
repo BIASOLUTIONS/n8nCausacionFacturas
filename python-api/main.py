@@ -2226,6 +2226,78 @@ def listar_facturas():
     }
 
 
+@app.get("/clasificaciones/conceptos")
+def listar_conceptos_clasificacion():
+    conceptos_base = [
+        {
+            "concepto": concepto,
+            "palabras_clave": palabras
+        }
+        for concepto, palabras in CONCEPTOS_SERVICIO_KEYWORDS
+    ]
+
+    conceptos = {
+        item["concepto"]
+        for item in conceptos_base
+        if item.get("concepto")
+    }
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            id,
+            erp,
+            proveedor_nit,
+            concepto_servicio,
+            palabras_clave,
+            cuenta_contable,
+            nombre_cuenta,
+            prioridad,
+            activo
+        FROM reglas_concepto_servicio
+        WHERE activo = 1
+        ORDER BY prioridad ASC, concepto_servicio ASC, id ASC
+    """)
+    reglas = [dict(row) for row in cursor.fetchall()]
+
+    for regla in reglas:
+        if regla.get("concepto_servicio"):
+            conceptos.add(regla.get("concepto_servicio"))
+
+    cursor.execute("""
+        SELECT
+            concepto_servicio,
+            COUNT(*) AS total_mapeos
+        FROM mapeo_erp
+        WHERE activo = 1
+          AND concepto_servicio IS NOT NULL
+          AND TRIM(concepto_servicio) <> ''
+        GROUP BY concepto_servicio
+        ORDER BY concepto_servicio ASC
+    """)
+    mapeos = [dict(row) for row in cursor.fetchall()]
+
+    for mapeo in mapeos:
+        if mapeo.get("concepto_servicio"):
+            conceptos.add(mapeo.get("concepto_servicio"))
+
+    conn.close()
+
+    conceptos_ordenados = sorted(conceptos)
+
+    return {
+        "ok": True,
+        "total_conceptos": len(conceptos_ordenados),
+        "conceptos": conceptos_ordenados,
+        "conceptos_base": conceptos_base,
+        "reglas_activas": reglas,
+        "mapeos_por_concepto": mapeos
+    }
+
+
 @app.get("/facturas/{factura_id}/detalle")
 def obtener_detalle_factura(factura_id: int):
     conn = sqlite3.connect(DB_PATH)
