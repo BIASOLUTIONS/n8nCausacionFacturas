@@ -8,6 +8,8 @@ __pycache__/
 .env.local
 .env.docker.local
 python-api/.env.docker.local
+.env.production
+python-api/.env.production
 
 # Base de datos local
 facturas_ai.db

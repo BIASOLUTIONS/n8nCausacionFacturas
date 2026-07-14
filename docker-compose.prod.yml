@@ -1,0 +1,52 @@
+services:
+  caddy:
+    image: caddy:2
+    container_name: facturas-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - N8N_DOMAIN=${N8N_DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - n8n
+
+  facturas-api:
+    build:
+      context: ./python-api
+    container_name: facturas-api
+    restart: unless-stopped
+    env_file:
+      - ./python-api/.env.production
+    volumes:
+      - facturas_data:/data/facturasia
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:stable
+    container_name: facturas-n8n
+    restart: unless-stopped
+    environment:
+      - TZ=America/Bogota
+      - GENERIC_TIMEZONE=America/Bogota
+      - N8N_HOST=${N8N_DOMAIN}
+      - N8N_PROTOCOL=https
+      - N8N_PORT=5678
+      - WEBHOOK_URL=https://${N8N_DOMAIN}/
+      - N8N_EDITOR_BASE_URL=https://${N8N_DOMAIN}/
+      - N8N_PROXY_HOPS=1
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_RUNNERS_ENABLED=true
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      - facturas-api
+
+volumes:
+  n8n_data:
+  facturas_data:
+  caddy_data:
+  caddy_config:
