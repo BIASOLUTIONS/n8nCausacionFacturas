@@ -88,3 +88,71 @@ mapeo_erp.item_description_erp
 ```
 
 Si falta mapeo, debe responder con error `REQUIERE_MAPEO_ERP`.
+
+## Facturas recurrentes de servicios publicos
+
+El clasificador base reconoce como `SERVICIOS_PUBLICOS` descripciones como:
+
+```text
+Energia Domiciliario
+Acueducto
+Aseo
+Alcantarillado
+TASA
+Alumbrado Publico
+```
+
+Si una factura mensual de servicios publicos pide revision manual la primera vez, responder con un concepto general:
+
+```text
+#CAUSAR_FACTURA
+
+FACTURA_ID=123
+CENTRO_COSTO=ADMIN
+
+TIPO     CUENTA      NOMBRE_CUENTA          CONCEPTO
+GASTO    51353001    Servicios publicos     SERVICIOS_PUBLICOS
+CXP      23359501    Otros proveedores      CXP
+```
+
+Reemplazar `51353001` por la cuenta real que corresponda en el plan contable.
+
+Si tiene IVA, incluir tambien la linea IVA correspondiente.
+
+Al procesar la respuesta manual, el backend guarda historico contable y tambien crea/actualiza `mapeo_erp` para:
+
+```text
+proveedor_nit + concepto_servicio + cuenta_contable
+```
+
+Con eso, las siguientes facturas del mismo proveedor y concepto deberian causarse automaticamente, siempre que el NIT receptor este permitido y los valores cuadren.
+
+## Facturas recurrentes de telecomunicaciones
+
+El clasificador base reconoce como `TELECOMUNICACIONES` descripciones como:
+
+```text
+TELEFONIA
+INTERNET
+TELEVISION
+TELEVISON
+TV
+CABLE
+```
+
+`TELEVISON` se incluye como variante mal escrita porque algunos XML llegan con esa descripcion.
+
+Si pide revision manual la primera vez, responder usando el mismo concepto:
+
+```text
+#CAUSAR_FACTURA
+
+FACTURA_ID=123
+CENTRO_COSTO=ADMIN
+
+TIPO     CUENTA       NOMBRE_CUENTA          CONCEPTO
+GASTO    CUENTA_REAL  Telecomunicaciones     TELECOMUNICACIONES
+CXP      23359501     Otros proveedores      CXP
+```
+
+Reemplazar `CUENTA_REAL` por la cuenta contable real que corresponda. Si tiene IVA, incluir tambien la linea IVA correspondiente.

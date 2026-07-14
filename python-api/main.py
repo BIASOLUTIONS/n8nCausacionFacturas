@@ -1,9 +1,10 @@
 from fastapi import FastAPI, UploadFile, File, Body
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from lxml import etree
 from html import unescape
 from dotenv import load_dotenv
 from io import BytesIO
+import imaplib
 import os
 import shutil
 import uuid
@@ -686,7 +687,30 @@ CONCEPTOS_SERVICIO_KEYWORDS = [
     ("SERVIDOR", ["servidor", "server", "vps", "cloud", "nube"]),
     ("DESARROLLO_SOFTWARE", ["desarrollo software", "software", "programacion", "aplicacion"]),
     ("SERVICIOS_TI", ["servicios ti", "consultoria ti", "tecnologia", "sistemas"]),
-    ("TELECOMUNICACIONES", ["internet", "fibra", "telefonia", "telecomunicaciones"]),
+    ("SERVICIOS_PUBLICOS", [
+        "servicios publicos",
+        "energia",
+        "energia domiciliario",
+        "acueducto",
+        "agua",
+        "aseo",
+        "alcantarillado",
+        "alumbrado",
+        "alumbrado publico",
+        "tasa aseo",
+        "tasa"
+    ]),
+    ("TELECOMUNICACIONES", [
+        "internet",
+        "fibra",
+        "telefonia",
+        "telecomunicaciones",
+        "television",
+        "televison",
+        "tv",
+        "cable",
+        "television por cable"
+    ]),
     ("MANTENIMIENTO_EQUIPO", ["mantenimiento", "equipo computacion", "computador"]),
     ("PAPELERIA", ["papeleria", "utiles", "fotocopias"]),
     ("COMBUSTIBLE", ["combustible", "lubricante", "gasolina", "diesel"]),
@@ -731,6 +755,18 @@ def conceptos_compatibles(concepto_solicitado, concepto_mapeo):
     }
 
     if concepto_solicitado in grupo_ti and concepto_mapeo in grupo_ti:
+        return True
+
+    grupo_servicios_publicos = {
+        "SERVICIOS_PUBLICOS",
+        "ENERGIA",
+        "ACUEDUCTO",
+        "ASEO",
+        "ALCANTARILLADO",
+        "ALUMBRADO_PUBLICO"
+    }
+
+    if concepto_solicitado in grupo_servicios_publicos and concepto_mapeo in grupo_servicios_publicos:
         return True
 
     return False
@@ -1123,7 +1159,7 @@ def cargar_xml_factura(xml_path: str):
         return etree.fromstring(descripcion.encode("utf-8"), parser=parser)
 
     raise ValueError(
-        f"No se encontró una factura tipo Invoice en el XML. Tipo raíz encontrado: {tag_root}"
+        f"No se encontrÃ³ una factura tipo Invoice en el XML. Tipo raÃ­z encontrado: {tag_root}"
     )
 
 
@@ -1137,6 +1173,61 @@ def numero_decimal(valor):
         return float(valor) if valor not in [None, ""] else 0
     except Exception:
         return 0
+
+
+def normalizar_nit(valor):
+    return re.sub(r"\D+", "", str(valor or ""))
+
+
+def obtener_nits_cliente_permitidos():
+    valor = os.getenv("NITS_CLIENTE_PERMITIDOS", "")
+    partes = re.split(r"[,;\n]+", valor)
+    return [normalizar_nit(parte) for parte in partes if normalizar_nit(parte)]
+
+
+def nit_coincide_permitido(nit_cliente, nit_permitido):
+    cliente = normalizar_nit(nit_cliente)
+    permitido = normalizar_nit(nit_permitido)
+
+    if not cliente or not permitido:
+        return False
+
+    if cliente == permitido:
+        return True
+
+    if len(cliente) == len(permitido) + 1 and cliente.startswith(permitido):
+        return True
+
+    if len(permitido) == len(cliente) + 1 and permitido.startswith(cliente):
+        return True
+
+    return False
+
+
+def validar_nit_cliente_permitido(datos_factura):
+    nits_permitidos = obtener_nits_cliente_permitidos()
+
+    if not nits_permitidos:
+        return {
+            "permitido": True,
+            "validacion_activa": False,
+            "nits_permitidos": []
+        }
+
+    cliente_nit = datos_factura.get("cliente_nit")
+    cliente_nit_normalizado = normalizar_nit(cliente_nit)
+    permitido = any(
+        nit_coincide_permitido(cliente_nit_normalizado, nit_permitido)
+        for nit_permitido in nits_permitidos
+    )
+
+    return {
+        "permitido": permitido,
+        "validacion_activa": True,
+        "cliente_nit": cliente_nit,
+        "cliente_nit_normalizado": cliente_nit_normalizado,
+        "nits_permitidos": nits_permitidos
+    }
 
 
 def extraer_datos_xml(xml_path: str):
@@ -1463,7 +1554,7 @@ def construir_propuesta_causacion(factura_id: int):
             "numero_factura": factura.get("numero_factura"),
             "requiere_revision": True,
             "confianza": 0,
-            "mensaje": "No existe histórico contable para este proveedor.",
+            "mensaje": "No existe histÃ³rico contable para este proveedor.",
             "propuesta": []
         }
 
@@ -1511,7 +1602,7 @@ def construir_propuesta_causacion(factura_id: int):
                 "confianza": 0,
                 "requiere_revision": True,
                 "estado": "REQUIERE_REVISION_CONCEPTO",
-                "mensaje": "Una o mÃ¡s lÃ­neas de la factura no pudieron clasificarse por producto/servicio.",
+                "mensaje": "Una o mÃƒÂ¡s lÃƒÂ­neas de la factura no pudieron clasificarse por producto/servicio.",
                 "clasificacion": clasificacion,
                 "propuesta": []
             }
@@ -1604,7 +1695,7 @@ def construir_propuesta_causacion(factura_id: int):
                 "confianza": 0,
                 "requiere_revision": True,
                 "estado": "REQUIERE_MAPEO_ERP",
-                "mensaje": "Una o mÃ¡s lÃ­neas clasificadas no tienen mapeo ERP suficiente.",
+                "mensaje": "Una o mÃƒÂ¡s lÃƒÂ­neas clasificadas no tienen mapeo ERP suficiente.",
                 "faltantes_mapeo": faltantes_mapeo,
                 "clasificacion": clasificacion,
                 "propuesta": []
@@ -1622,7 +1713,7 @@ def construir_propuesta_causacion(factura_id: int):
                     "requiere_revision": True,
                     "estado": "REQUIERE_REVISION",
                     "confianza": 0,
-                    "mensaje": "La factura tiene IVA, pero no se encontrÃ³ cuenta IVA en el histÃ³rico.",
+                    "mensaje": "La factura tiene IVA, pero no se encontrÃƒÂ³ cuenta IVA en el histÃƒÂ³rico.",
                     "propuesta": []
                 }
 
@@ -1634,7 +1725,7 @@ def construir_propuesta_causacion(factura_id: int):
                 "centro_costo": centro_costo,
                 "debito": iva,
                 "credito": 0,
-                "descripcion": "IVA descontable segÃºn histÃ³rico del proveedor"
+                "descripcion": "IVA descontable segÃƒÂºn histÃƒÂ³rico del proveedor"
             })
 
         if not cuenta_pagar:
@@ -1648,7 +1739,7 @@ def construir_propuesta_causacion(factura_id: int):
                 "requiere_revision": True,
                 "estado": "REQUIERE_REVISION",
                 "confianza": 0,
-                "mensaje": "No se encontrÃ³ cuenta por pagar en el histÃ³rico del proveedor.",
+                "mensaje": "No se encontrÃƒÂ³ cuenta por pagar en el histÃƒÂ³rico del proveedor.",
                 "propuesta": []
             }
 
@@ -1660,7 +1751,7 @@ def construir_propuesta_causacion(factura_id: int):
             "centro_costo": centro_costo,
             "debito": 0,
             "credito": total_pagar,
-            "descripcion": "Cuenta por pagar segÃºn histÃ³rico del proveedor"
+            "descripcion": "Cuenta por pagar segÃƒÂºn histÃƒÂ³rico del proveedor"
         })
 
         confianza_lineas = [
@@ -1703,7 +1794,7 @@ def construir_propuesta_causacion(factura_id: int):
             "centro_costo": centro_costo,
             "debito": valor_gasto,
             "credito": 0,
-            "descripcion": "Gasto según histórico del proveedor"
+            "descripcion": "Gasto segÃºn histÃ³rico del proveedor"
         })
 
     if iva > 0 and cuenta_iva:
@@ -1715,7 +1806,7 @@ def construir_propuesta_causacion(factura_id: int):
             "centro_costo": centro_costo,
             "debito": iva,
             "credito": 0,
-            "descripcion": "IVA descontable según histórico del proveedor"
+            "descripcion": "IVA descontable segÃºn histÃ³rico del proveedor"
         })
 
     if cuenta_pagar:
@@ -1727,7 +1818,7 @@ def construir_propuesta_causacion(factura_id: int):
             "centro_costo": centro_costo,
             "debito": 0,
             "credito": total_pagar,
-            "descripcion": "Cuenta por pagar según histórico del proveedor"
+            "descripcion": "Cuenta por pagar segÃºn histÃ³rico del proveedor"
         })
 
     requiere_revision = len(propuesta) == 0
@@ -1782,11 +1873,85 @@ def extraer_factura_id(subject: str, body: str):
     return None
 
 
+def normalizar_tipo_linea_respuesta(tipo):
+    tipo_normalizado = normalizar_clave_excel(tipo).upper()
+
+    if tipo_normalizado == "CUENTA_POR_PAGAR":
+        return "CXP"
+
+    if tipo_normalizado in ["GASTO", "IVA", "CXP"]:
+        return tipo_normalizado
+
+    return None
+
+
+def construir_linea_respuesta(tipo, cuenta, nombre_cuenta, concepto_servicio, centro_costo_default):
+    tipo_normalizado = normalizar_tipo_linea_respuesta(tipo)
+
+    if not tipo_normalizado:
+        raise ValueError(
+            f"Tipo de linea no soportado: {tipo}. Use GASTO, IVA o CXP."
+        )
+
+    cuenta_texto = str(cuenta or "").strip()
+    nombre_texto = str(nombre_cuenta or "").strip()
+    concepto_texto = str(concepto_servicio or "").strip() or None
+
+    if not cuenta_texto or not nombre_texto:
+        raise ValueError(
+            "Cada linea contable debe incluir tipo, cuenta y nombre de cuenta."
+        )
+
+    return {
+        "tipo": tipo_normalizado,
+        "cuenta_contable": cuenta_texto,
+        "nombre_cuenta": nombre_texto,
+        "centro_costo": centro_costo_default,
+        "concepto_servicio": concepto_texto,
+        "descripcion": nombre_texto
+    }
+
+
+def parsear_linea_tabla_respuesta(line):
+    if "|" in line:
+        partes = [p.strip() for p in line.split("|")]
+    elif "\t" in line:
+        partes = [p.strip() for p in line.split("\t")]
+    else:
+        partes = [p.strip() for p in re.split(r"\s{2,}", line)]
+
+    if len(partes) < 4:
+        return None
+
+    tipo = partes[0]
+
+    if not normalizar_tipo_linea_respuesta(tipo):
+        return None
+
+    cuenta = partes[1]
+    concepto_servicio = partes[-1]
+    nombre_cuenta = " ".join(partes[2:-1]).strip()
+
+    if not cuenta or not nombre_cuenta or not concepto_servicio:
+        return None
+
+    return tipo, cuenta, nombre_cuenta, concepto_servicio
+
+
+def es_encabezado_tabla_respuesta(line):
+    texto = normalizar_clave_excel(line)
+    return (
+        "tipo" in texto
+        and "cuenta" in texto
+        and "concepto" in texto
+    )
+
+
 def parsear_respuesta_causacion(subject: str, body: str):
     texto_limpio = limpiar_cuerpo_correo(body)
 
     if "#CAUSAR_FACTURA" not in texto_limpio:
-        raise ValueError("No se encontró el marcador #CAUSAR_FACTURA en la respuesta.")
+        raise ValueError("No se encontro el marcador #CAUSAR_FACTURA en la respuesta.")
 
     factura_id = extraer_factura_id(subject, texto_limpio)
 
@@ -1812,36 +1977,38 @@ def parsear_respuesta_causacion(subject: str, body: str):
 
             if len(partes) < 3:
                 raise ValueError(
-                    f"Línea contable inválida. Debe tener al menos 3 partes: {line}"
+                    f"Linea contable invalida. Debe tener al menos 3 partes: {line}"
                 )
 
-            tipo = partes[0].upper()
-            cuenta = partes[1]
-            nombre_cuenta = partes[2]
-            concepto_servicio = partes[3] if len(partes) >= 4 else None
+            lineas.append(construir_linea_respuesta(
+                partes[0],
+                partes[1],
+                partes[2],
+                partes[3] if len(partes) >= 4 else None,
+                centro_costo_default
+            ))
+            continue
 
-            if tipo not in ["GASTO", "IVA", "CXP", "CUENTA_POR_PAGAR"]:
-                raise ValueError(
-                    f"Tipo de línea no soportado: {tipo}. Use GASTO, IVA o CXP."
-                )
+        if es_encabezado_tabla_respuesta(line):
+            continue
 
-            if tipo == "CUENTA_POR_PAGAR":
-                tipo = "CXP"
+        linea_tabla = parsear_linea_tabla_respuesta(line)
 
-            lineas.append({
-                "tipo": tipo,
-                "cuenta_contable": cuenta,
-                "nombre_cuenta": nombre_cuenta,
-                "centro_costo": centro_costo_default,
-                "concepto_servicio": concepto_servicio,
-                "descripcion": nombre_cuenta
-            })
+        if linea_tabla:
+            tipo, cuenta, nombre_cuenta, concepto_servicio = linea_tabla
+            lineas.append(construir_linea_respuesta(
+                tipo,
+                cuenta,
+                nombre_cuenta,
+                concepto_servicio,
+                centro_costo_default
+            ))
 
     if not factura_id:
-        raise ValueError("No se encontró FACTURA_ID en la respuesta.")
+        raise ValueError("No se encontro FACTURA_ID en la respuesta.")
 
     if not lineas:
-        raise ValueError("No se encontraron líneas contables en la respuesta.")
+        raise ValueError("No se encontraron lineas contables en la respuesta.")
 
     return {
         "factura_id": factura_id,
@@ -1871,13 +2038,13 @@ def construir_lineas_respuesta_con_valores_factura(factura: dict, lineas_usuario
         cuentas[tipo] = linea
 
     if "GASTO" not in cuentas:
-        raise ValueError("La respuesta debe incluir una línea tipo GASTO.")
+        raise ValueError("La respuesta debe incluir una lÃ­nea tipo GASTO.")
 
     if "CXP" not in cuentas:
-        raise ValueError("La respuesta debe incluir una línea tipo CXP.")
+        raise ValueError("La respuesta debe incluir una lÃ­nea tipo CXP.")
 
     if iva > 0 and "IVA" not in cuentas:
-        raise ValueError("La factura tiene IVA, por lo tanto debe incluir una línea tipo IVA.")
+        raise ValueError("La factura tiene IVA, por lo tanto debe incluir una lÃ­nea tipo IVA.")
 
     lineas_calculadas = []
 
@@ -1929,8 +2096,8 @@ def construir_lineas_respuesta_con_valores_factura(factura: dict, lineas_usuario
 
     if total_debito != total_credito:
         raise ValueError(
-            f"La contabilización calculada con valores de la factura está descuadrada. "
-            f"Débito={total_debito}, Crédito={total_credito}"
+            f"La contabilizaciÃ³n calculada con valores de la factura estÃ¡ descuadrada. "
+            f"DÃ©bito={total_debito}, CrÃ©dito={total_credito}"
         )
 
     return {
@@ -1941,6 +2108,80 @@ def construir_lineas_respuesta_con_valores_factura(factura: dict, lineas_usuario
         "iva_factura": iva,
         "valor_gasto_factura": valor_gasto
     }
+
+
+def upsert_mapeo_erp_desde_linea_manual(cursor, factura: dict, linea: dict):
+    if linea.get("tipo") != "GASTO":
+        return
+
+    proveedor_nit = factura.get("proveedor_nit")
+    concepto = linea.get("concepto_servicio")
+    cuenta = linea.get("cuenta_contable")
+
+    if not proveedor_nit or not concepto or not cuenta:
+        return
+
+    cursor.execute("""
+        SELECT id
+        FROM mapeo_erp
+        WHERE activo = 1
+          AND erp = 'SIIGO'
+          AND proveedor_nit = ?
+          AND concepto_servicio = ?
+          AND cuenta_contable = ?
+        LIMIT 1
+    """, (proveedor_nit, concepto, cuenta))
+
+    existente = cursor.fetchone()
+
+    if existente:
+        cursor.execute("""
+            UPDATE mapeo_erp
+            SET
+                proveedor_nombre = ?,
+                nombre_cuenta = ?,
+                item_type_erp = COALESCE(NULLIF(item_type_erp, ''), 'Account'),
+                item_code_erp = COALESCE(NULLIF(item_code_erp, ''), ?),
+                item_description_erp = COALESCE(NULLIF(item_description_erp, ''), ?),
+                observacion = COALESCE(NULLIF(observacion, ''), 'Aprendido desde respuesta manual')
+            WHERE id = ?
+        """, (
+            factura.get("proveedor_nombre"),
+            linea.get("nombre_cuenta"),
+            cuenta,
+            linea.get("nombre_cuenta"),
+            existente[0]
+        ))
+        return
+
+    cursor.execute("""
+        INSERT INTO mapeo_erp (
+            erp,
+            proveedor_nit,
+            proveedor_nombre,
+            concepto_servicio,
+            cuenta_contable,
+            nombre_cuenta,
+            item_type_erp,
+            item_code_erp,
+            item_description_erp,
+            activo,
+            observacion
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        "SIIGO",
+        proveedor_nit,
+        factura.get("proveedor_nombre"),
+        concepto,
+        cuenta,
+        linea.get("nombre_cuenta"),
+        "Account",
+        cuenta,
+        linea.get("nombre_cuenta"),
+        1,
+        "Aprendido desde respuesta manual"
+    ))
 
 
 @app.get("/health")
@@ -1983,6 +2224,251 @@ def listar_facturas():
         "ok": True,
         "facturas": [dict(row) for row in rows]
     }
+
+
+@app.get("/facturas/{factura_id}/detalle")
+def obtener_detalle_factura(factura_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT *
+        FROM facturas_recibidas
+        WHERE id = ?
+    """, (factura_id,))
+
+    factura_row = cursor.fetchone()
+
+    if not factura_row:
+        conn.close()
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "estado": "FACTURA_NO_ENCONTRADA",
+                "mensaje": f"No existe la factura {factura_id}.",
+                "factura_id": factura_id
+            }
+        )
+
+    factura = dict(factura_row)
+
+    cursor.execute("""
+        SELECT *
+        FROM facturas_lineas
+        WHERE factura_id = ?
+        ORDER BY id
+    """, (factura_id,))
+    lineas = [dict(row) for row in cursor.fetchall()]
+
+    cursor.execute("""
+        SELECT *
+        FROM causaciones
+        WHERE factura_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+    """, (factura_id,))
+    causacion_row = cursor.fetchone()
+
+    causacion = dict(causacion_row) if causacion_row else None
+
+    conn.close()
+
+    return {
+        "ok": True,
+        "factura": factura,
+        "lineas": lineas,
+        "causacion": causacion,
+        "tiene_pdf": bool(factura.get("pdf_principal") and os.path.exists(factura.get("pdf_principal")))
+    }
+
+
+@app.get("/facturas/{factura_id}/pdf")
+def descargar_pdf_factura(factura_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            id,
+            numero_factura,
+            proveedor_nombre,
+            pdf_principal
+        FROM facturas_recibidas
+        WHERE id = ?
+    """, (factura_id,))
+
+    factura_row = cursor.fetchone()
+    conn.close()
+
+    if not factura_row:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "estado": "FACTURA_NO_ENCONTRADA",
+                "mensaje": f"No existe la factura {factura_id}.",
+                "factura_id": factura_id
+            }
+        )
+
+    factura = dict(factura_row)
+    pdf_path = factura.get("pdf_principal")
+
+    if not pdf_path or not os.path.exists(pdf_path):
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "estado": "PDF_NO_ENCONTRADO",
+                "mensaje": "La factura no tiene PDF asociado o el archivo no existe.",
+                "factura_id": factura_id,
+                "pdf_principal": pdf_path
+            }
+        )
+
+    proveedor = re.sub(r"[^A-Za-z0-9._ -]+", "", factura.get("proveedor_nombre") or "Proveedor").strip()
+    numero = re.sub(r"[^A-Za-z0-9._ -]+", "", factura.get("numero_factura") or str(factura_id)).strip()
+    filename = f"{proveedor} - {numero}.pdf"
+
+    return FileResponse(
+        path=pdf_path,
+        media_type="application/pdf",
+        filename=filename
+    )
+
+
+def obtener_env_requerido(nombre: str):
+    valor = os.getenv(nombre)
+    if not valor:
+        raise ValueError(f"Variable de entorno requerida no configurada: {nombre}")
+    return valor
+
+
+def normalizar_message_id(message_id: str):
+    texto = str(message_id or "").strip()
+    if not texto:
+        return ""
+    texto = texto.strip("<>")
+    return f"<{texto}>"
+
+
+def mailbox_imap(mailbox: str):
+    nombre = str(mailbox or "INBOX").strip() or "INBOX"
+    if nombre.upper() == "INBOX":
+        return "INBOX"
+    return '"' + nombre.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def uid_desde_respuesta_search(data):
+    if not data:
+        return None
+
+    primera = data[0]
+    if isinstance(primera, bytes):
+        texto = primera.decode("utf-8", errors="ignore").strip()
+    else:
+        texto = str(primera or "").strip()
+
+    if not texto:
+        return None
+
+    return texto.split()[0]
+
+
+def archivar_correo_imap(
+    email_uid: str = "",
+    email_message_id_header: str = "",
+    source_mailbox: str = "INBOX",
+    target_mailbox: str = "Facturas Procesadas",
+):
+    host = obtener_env_requerido("IMAP_HOST")
+    user = obtener_env_requerido("IMAP_USER")
+    password = obtener_env_requerido("IMAP_PASSWORD")
+    port = int(os.getenv("IMAP_PORT", "993"))
+    secure = os.getenv("IMAP_SECURE", "true").lower() != "false"
+
+    origen = source_mailbox or os.getenv("IMAP_SOURCE_MAILBOX", "INBOX")
+    destino = target_mailbox or os.getenv("IMAP_ARCHIVE_MAILBOX", "Facturas Procesadas")
+    message_id = normalizar_message_id(email_message_id_header)
+    uid = str(email_uid or "").strip()
+
+    if not uid and not message_id:
+        raise ValueError("Debe enviar email_uid o email_message_id_header para ubicar el correo.")
+
+    imap = imaplib.IMAP4_SSL(host, port) if secure else imaplib.IMAP4(host, port)
+
+    try:
+        imap.login(user, password)
+
+        status, _ = imap.select(mailbox_imap(origen), readonly=False)
+        if status != "OK":
+            raise ValueError(f"No se pudo abrir el mailbox origen IMAP: {origen}")
+
+        if not uid:
+            status, data = imap.uid("SEARCH", None, "HEADER", "Message-ID", message_id)
+            if status != "OK":
+                raise ValueError("No se pudo buscar el correo por Message-ID en IMAP.")
+            uid = uid_desde_respuesta_search(data)
+
+        if not uid:
+            raise ValueError("No se encontro el correo en IMAP.")
+
+        imap.create(mailbox_imap(destino))
+
+        move_status, move_data = imap.uid("MOVE", uid, mailbox_imap(destino))
+        metodo = "UID MOVE"
+
+        if move_status != "OK":
+            copy_status, copy_data = imap.uid("COPY", uid, mailbox_imap(destino))
+            if copy_status != "OK":
+                detalle = copy_data or move_data
+                raise ValueError(f"No se pudo mover/copiar el correo en IMAP: {detalle}")
+
+            store_status, store_data = imap.uid("STORE", uid, "+FLAGS", r"(\Deleted)")
+            if store_status != "OK":
+                raise ValueError(f"El correo se copio pero no se pudo quitar de {origen}: {store_data}")
+
+            imap.expunge()
+            metodo = "COPY + DELETE"
+
+        return {
+            "ok": True,
+            "estado": "CORREO_ARCHIVADO_IMAP",
+            "mensaje": "Correo movido por IMAP correctamente.",
+            "uid": uid,
+            "source_mailbox": origen,
+            "target_mailbox": destino,
+            "metodo": metodo
+        }
+
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+
+
+@app.post("/correo/archivar-imap")
+def archivar_correo_imap_endpoint(payload: dict = Body(...)):
+    try:
+        return archivar_correo_imap(
+            email_uid=payload.get("email_uid", ""),
+            email_message_id_header=payload.get("email_message_id_header", ""),
+            source_mailbox=payload.get("source_mailbox") or os.getenv("IMAP_SOURCE_MAILBOX", "INBOX"),
+            target_mailbox=payload.get("target_mailbox") or os.getenv("IMAP_ARCHIVE_MAILBOX", "Facturas Procesadas"),
+        )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "estado": "ERROR_ARCHIVANDO_IMAP",
+                "mensaje": str(exc)
+            }
+        )
 
 
 @app.post("/facturas/{factura_id}/clasificar-conceptos")
@@ -2119,7 +2605,7 @@ async def cargar_archivo_historico(file: UploadFile = File(...), reemplazar: boo
     hoja_historico = obtener_hoja_excel(
         workbook,
         "Historico_Contable",
-        "Histórico Contable",
+        "HistÃ³rico Contable",
         "Historico Contable"
     )
     hoja_mapeo = obtener_hoja_excel(
@@ -2349,7 +2835,7 @@ def causar_factura(factura_id: int):
             status_code=propuesta.get("status_code", 400),
             content={
                 "ok": False,
-                "error": propuesta.get("error", "No fue posible construir la causación.")
+                "error": propuesta.get("error", "No fue posible construir la causaciÃ³n.")
             }
         )
 
@@ -2360,7 +2846,7 @@ def causar_factura(factura_id: int):
             content={
                 "ok": False,
                 "estado": estado_revision,
-                "mensaje": propuesta.get("mensaje", "La factura requiere revisión antes de causar."),
+                "mensaje": propuesta.get("mensaje", "La factura requiere revisiÃ³n antes de causar."),
                 "factura_id": factura_id,
                 "clasificacion": propuesta.get("clasificacion"),
                 "faltantes_mapeo": propuesta.get("faltantes_mapeo")
@@ -2375,7 +2861,7 @@ def causar_factura(factura_id: int):
             content={
                 "ok": False,
                 "estado": "SIN_LINEAS",
-                "mensaje": "No se generaron líneas contables para causar.",
+                "mensaje": "No se generaron lÃ­neas contables para causar.",
                 "factura_id": factura_id
             }
         )
@@ -2389,7 +2875,7 @@ def causar_factura(factura_id: int):
             content={
                 "ok": False,
                 "estado": "DESCUADRADA",
-                "mensaje": "La causación no cuadra. Débitos y créditos son diferentes.",
+                "mensaje": "La causaciÃ³n no cuadra. DÃ©bitos y crÃ©ditos son diferentes.",
                 "factura_id": factura_id,
                 "total_debito": total_debito,
                 "total_credito": total_credito,
@@ -2416,7 +2902,7 @@ def causar_factura(factura_id: int):
         return {
             "ok": True,
             "estado": "YA_CAUSADA",
-            "mensaje": "La factura ya tenía una causación registrada.",
+            "mensaje": "La factura ya tenÃ­a una causaciÃ³n registrada.",
             "factura_id": factura_id,
             "causacion_id": existente[0],
             "total_debito": total_debito,
@@ -2446,7 +2932,7 @@ def causar_factura(factura_id: int):
         propuesta.get("confianza"),
         total_debito,
         total_credito,
-        "Factura causada automáticamente en modo simulación usando valores reales del XML."
+        "Factura causada automÃ¡ticamente en modo simulaciÃ³n usando valores reales del XML."
     ))
 
     causacion_id = cursor.lastrowid
@@ -2483,7 +2969,7 @@ def causar_factura(factura_id: int):
     return {
         "ok": True,
         "estado": "CAUSADA_SIMULADA",
-        "mensaje": "Factura causada automáticamente en modo simulación usando valores reales del XML.",
+        "mensaje": "Factura causada automÃ¡ticamente en modo simulaciÃ³n usando valores reales del XML.",
         "factura_id": factura_id,
         "causacion_id": causacion_id,
         "proveedor_nit": propuesta.get("proveedor_nit"),
@@ -2548,7 +3034,7 @@ def procesar_respuesta_revision(payload: dict = Body(...)):
             return {
                 "ok": True,
                 "estado": "YA_CAUSADA",
-                "mensaje": "La factura ya tenía una causación registrada.",
+                "mensaje": "La factura ya tenÃ­a una causaciÃ³n registrada.",
                 "factura_id": factura_id,
                 "causacion_id": causacion_existente[0]
             }
@@ -2590,9 +3076,11 @@ def procesar_respuesta_revision(payload: dict = Body(...)):
                 linea.get("credito"),
                 linea.get("cuenta_contable") if linea.get("tipo") == "IVA" else None,
                 None,
-                f"Respuesta correo revisión - {from_email}",
+                f"Respuesta correo revisiÃ³n - {from_email}",
                 factura.get("fecha_factura")
             ))
+
+            upsert_mapeo_erp_desde_linea_manual(cursor, factura, linea)
 
         cursor.execute("""
             INSERT INTO causaciones (
@@ -2653,7 +3141,7 @@ def procesar_respuesta_revision(payload: dict = Body(...)):
         return {
             "ok": True,
             "estado": "CAUSADA_RESPUESTA_MANUAL",
-            "mensaje": "La factura fue causada con la respuesta manual usando valores reales del XML y el histórico fue guardado.",
+            "mensaje": "La factura fue causada con la respuesta manual usando valores reales del XML y el histÃ³rico fue guardado.",
             "factura_id": factura_id,
             "causacion_id": causacion_id,
             "proveedor_nit": factura.get("proveedor_nit"),
@@ -2755,7 +3243,7 @@ async def procesar_adjunto(file: UploadFile = File(...)):
                 status_code=400,
                 content={
                     "ok": False,
-                    "error": "No se encontró ningún XML dentro del archivo recibido.",
+                    "error": "No se encontrÃ³ ningÃºn XML dentro del archivo recibido.",
                     "archivo_recibido": ruta_guardada,
                     "carpeta_trabajo": carpeta_trabajo
                 }
@@ -2765,6 +3253,30 @@ async def procesar_adjunto(file: UploadFile = File(...)):
         pdf_principal = pdf_files[0] if pdf_files else None
 
         datos_factura = extraer_datos_xml(xml_principal)
+        validacion_nit = validar_nit_cliente_permitido(datos_factura)
+
+        if not validacion_nit.get("permitido"):
+            return {
+                "ok": False,
+                "estado": "CLIENTE_NIT_NO_PERMITIDO",
+                "mensaje": (
+                    "La factura no fue procesada porque el NIT del cliente/receptor "
+                    "no esta en la lista NITS_CLIENTE_PERMITIDOS."
+                ),
+                "duplicada": False,
+                "factura_id": None,
+                "nombre_original": nombre_original,
+                "archivo_recibido": ruta_guardada,
+                "carpeta_trabajo": carpeta_trabajo,
+                "total_xml_encontrados": len(xml_files),
+                "total_pdf_encontrados": len(pdf_files),
+                "xml_principal": xml_principal,
+                "pdf_principal": pdf_principal,
+                "factura": datos_factura,
+                "cliente_nit": datos_factura.get("cliente_nit"),
+                "cliente_nit_normalizado": validacion_nit.get("cliente_nit_normalizado"),
+                "nits_permitidos": validacion_nit.get("nits_permitidos")
+            }
 
         resultado_proveedor = registrar_proveedor(datos_factura)
 
@@ -2789,7 +3301,8 @@ async def procesar_adjunto(file: UploadFile = File(...)):
             "total_pdf_encontrados": len(pdf_files),
             "xml_principal": xml_principal,
             "pdf_principal": pdf_principal,
-            "factura": datos_factura
+            "factura": datos_factura,
+            "validacion_nit_cliente": validacion_nit
         }
 
     except zipfile.BadZipFile:
@@ -2797,7 +3310,7 @@ async def procesar_adjunto(file: UploadFile = File(...)):
             status_code=400,
             content={
                 "ok": False,
-                "error": "El archivo ZIP está dañado o no es un ZIP válido.",
+                "error": "El archivo ZIP estÃ¡ daÃ±ado o no es un ZIP vÃ¡lido.",
                 "archivo_recibido": ruta_guardada
             }
         )
@@ -2823,7 +3336,7 @@ def siigo_auth_test():
         return {
             "ok": True,
             "enabled": client.enabled,
-            "mensaje": "Conexión con SIIGO validada correctamente.",
+            "mensaje": "ConexiÃ³n con SIIGO validada correctamente.",
             "siigo": resultado
         }
 
@@ -2874,7 +3387,7 @@ def siigo_catalogos():
 
         return {
             "ok": True,
-            "mensaje": "Catálogos SIIGO consultados correctamente.",
+            "mensaje": "CatÃ¡logos SIIGO consultados correctamente.",
             "catalogos": catalogos
         }
 
@@ -2883,7 +3396,7 @@ def siigo_catalogos():
             status_code=400,
             content={
                 "ok": False,
-                "mensaje": "No fue posible consultar catálogos de SIIGO.",
+                "mensaje": "No fue posible consultar catÃ¡logos de SIIGO.",
                 "error": str(e)
             }
         )
@@ -3043,7 +3556,7 @@ def construir_payload_siigo_compra_desde_causacion(causacion_id: int):
 
     if not causacion_row:
         conn.close()
-        raise ValueError(f"No existe la causación {causacion_id}.")
+        raise ValueError(f"No existe la causaciÃ³n {causacion_id}.")
 
     causacion = dict(causacion_row)
 
@@ -3057,7 +3570,7 @@ def construir_payload_siigo_compra_desde_causacion(causacion_id: int):
 
     if not factura_row:
         conn.close()
-        raise ValueError(f"No existe la factura asociada a la causación {causacion_id}.")
+        raise ValueError(f"No existe la factura asociada a la causaciÃ³n {causacion_id}.")
 
     factura = dict(factura_row)
 
@@ -3230,12 +3743,12 @@ def construir_payload_siigo_compra_desde_causacion(causacion_id: int):
     ]
 
     if not lineas_gasto:
-        raise ValueError("No se encontró una línea de gasto para construir el ítem SIIGO.")
+        raise ValueError("No se encontrÃ³ una lÃ­nea de gasto para construir el Ã­tem SIIGO.")
 
     if len(lineas_gasto) > 1:
         raise ValueError(
-            "La simulación SIIGO actual solo soporta una línea de gasto. "
-            "Luego habilitamos múltiples líneas."
+            "La simulaciÃ³n SIIGO actual solo soporta una lÃ­nea de gasto. "
+            "Luego habilitamos mÃºltiples lÃ­neas."
         )
 
     linea_gasto = lineas_gasto[0]
@@ -3276,7 +3789,7 @@ def construir_payload_siigo_compra_desde_causacion(causacion_id: int):
         "observations": (
             f"Factura generada desde FacturasIA. "
             f"Factura ID: {factura.get('id')}. "
-            f"Causación ID: {causacion_id}. "
+            f"CausaciÃ³n ID: {causacion_id}. "
             f"Factura proveedor: {factura.get('numero_factura')}."
         ),
         "items": [
@@ -3316,7 +3829,7 @@ def siigo_preparar_compra(causacion_id: int):
 
         return {
             "ok": True,
-            "mensaje": "Payload de compra SIIGO preparado correctamente. No se envió a SIIGO.",
+            "mensaje": "Payload de compra SIIGO preparado correctamente. No se enviÃ³ a SIIGO.",
             "modo": "SIMULACION_NO_ENVIADO",
             "causacion_id": causacion_id,
             "validacion": resultado["validacion"],
@@ -3386,7 +3899,7 @@ def siigo_enviar_compra(causacion_id: int):
                 content={
                     "ok": False,
                     "estado": "SIIGO_DESHABILITADO",
-                    "mensaje": "SIIGO_ENABLED está en false. Cambie SIIGO_ENABLED=true en .env para permitir envío real.",
+                    "mensaje": "SIIGO_ENABLED estÃ¡ en false. Cambie SIIGO_ENABLED=true en .env para permitir envÃ­o real.",
                     "causacion_id": causacion_id
                 }
             )

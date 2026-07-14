@@ -721,3 +721,28 @@ Payload SIIGO basado en mapeo ERP
 Manejo formal de REQUIERE_REVISION_CONCEPTO
 Manejo formal de REQUIERE_MAPEO_ERP
 ```
+---
+
+## 15. Validacion de NIT receptor
+
+El backend valida el NIT del cliente/receptor de la factura antes de guardarla y causarla.
+
+Configurar en `python-api/.env`:
+
+```env
+NITS_CLIENTE_PERMITIDOS=900123456,901234567
+```
+
+Reglas:
+
+```text
+Si NITS_CLIENTE_PERMITIDOS esta vacio, la validacion queda inactiva.
+Si el NIT del receptor no esta en la lista, el backend responde:
+CLIENTE_NIT_NO_PERMITIDO
+```
+
+El workflow `n8n/Causacion Fact Prov.json` tiene el nodo `¿Factura procesada?`.
+
+Si el backend responde `ok: false`, el flujo envia `Notificar factura rechazada` y no continua a duplicados, causacion ni postproceso.
+
+Esto permite rechazar facturas que llegaron al buzon pero no corresponden a la empresa, manteniendo como permitidos los NIT adicionales que deban contabilizarse, por ejemplo servicios publicos.
