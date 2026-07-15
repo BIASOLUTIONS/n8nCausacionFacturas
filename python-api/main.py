@@ -682,6 +682,85 @@ def generar_palabras_desde_concepto(concepto):
     return palabras
 
 
+PALABRAS_APRENDIZAJE_IGNORADAS = {
+    "para",
+    "por",
+    "con",
+    "del",
+    "las",
+    "los",
+    "una",
+    "uno",
+    "sus",
+    "sas",
+    "s.a.s",
+    "sa",
+    "s.a",
+    "ltda",
+    "colombia",
+    "factura",
+    "servicio",
+    "servicios",
+    "producto",
+    "productos",
+    "unidad",
+    "cantidad"
+}
+
+
+def generar_palabras_clave_descripcion_aprendida(descripcion):
+    texto = normalizar_texto_busqueda(descripcion)
+
+    if not texto:
+        return []
+
+    texto = re.sub(r"[^a-z0-9]+", " ", texto).strip()
+
+    if not texto:
+        return []
+
+    tokens_originales = texto.split()
+    tokens_filtrados = []
+
+    for token in tokens_originales:
+        if token in PALABRAS_APRENDIZAJE_IGNORADAS:
+            continue
+
+        if token.isdigit() and len(token) > 4:
+            continue
+
+        if len(token) > 18 and re.search(r"[a-z]", token) and re.search(r"\d", token):
+            continue
+
+        if len(token) < 4 and not token.isdigit():
+            continue
+
+        tokens_filtrados.append(token)
+
+    palabras = []
+
+    def agregar(valor):
+        valor = " ".join(str(valor or "").split()).strip()
+
+        if valor and valor not in palabras:
+            palabras.append(valor)
+
+    for indice, token in enumerate(tokens_originales):
+        if token in {"microsoft", "office", "google", "adobe"} and indice + 1 < len(tokens_originales):
+            siguiente = tokens_originales[indice + 1]
+            if siguiente.isdigit() or len(siguiente) >= 3:
+                agregar(f"{token} {siguiente}")
+
+    for tamano in (3, 2):
+        for indice in range(0, max(0, len(tokens_filtrados) - tamano + 1)):
+            agregar(" ".join(tokens_filtrados[indice:indice + tamano]))
+
+    for token in tokens_filtrados:
+        agregar(token)
+
+    return palabras[:12]
+
+
 CONCEPTOS_SERVICIO_KEYWORDS = [
     ("CERTIFICADO_SSL", ["certificado ssl", "ssl", "tls", "https"]),
     ("HOSTING", ["hosting", "hospedaje", "web hosting", "alojamiento web"]),
@@ -2114,14 +2193,9 @@ def construir_lineas_respuesta_con_valores_factura(factura: dict, lineas_usuario
         valor_gasto = 0
 
     cuentas = {}
-    ajustes = []
 
     for linea in lineas_usuario:
         tipo = linea.get("tipo")
-
-        if tipo == "AJUSTE":
-            ajustes.append(linea)
-            continue
 
         cuentas[tipo] = linea
 
@@ -2164,23 +2238,6 @@ def construir_lineas_respuesta_con_valores_factura(factura: dict, lineas_usuario
             "credito": 0,
             "concepto_servicio": iva_linea.get("concepto_servicio") or "IVA",
             "descripcion": iva_linea.get("descripcion")
-        })
-
-    total_debito_previo = round(sum(float(l.get("debito") or 0) for l in lineas_calculadas), 2)
-    ajuste_debito = round(total_pagar - total_debito_previo, 2)
-
-    if ajuste_debito > 0 and ajustes:
-        ajuste = ajustes[0]
-
-        lineas_calculadas.append({
-            "tipo": "AJUSTE",
-            "cuenta_contable": ajuste.get("cuenta_contable"),
-            "nombre_cuenta": ajuste.get("nombre_cuenta"),
-            "centro_costo": ajuste.get("centro_costo"),
-            "debito": ajuste_debito,
-            "credito": 0,
-            "concepto_servicio": ajuste.get("concepto_servicio") or "AJUSTE",
-            "descripcion": ajuste.get("descripcion") or "Ajuste para cuadrar total de factura"
         })
 
     cxp = cuentas["CXP"]
@@ -2287,6 +2344,132 @@ def upsert_mapeo_erp_desde_linea_manual(cursor, factura: dict, linea: dict):
         1,
         "Aprendido desde respuesta manual"
     ))
+
+
+def upsert_reglas_aprendidas_desde_respuesta_manual(cursor, factura: dict, lineas_factura: list, lineas_contables: list):
+    proveedor_nit = factura.get("proveedor_nit")
+
+    if not proveedor_nit:
+        return []
+
+    lineas_gasto = [
+        linea
+        for linea in lineas_contables
+        if linea.get("tipo") in {"GASTO", "AJUSTE"}
+        and linea.get("concepto_servicio")
+        and linea.get("cuenta_contable")
+    ]
+
+    if not lineas_gasto:
+        return []
+
+    if len(lineas_gasto) == 1:
+        linea_base = lineas_gasto[0]
+    else:
+        linea_base = sorted(
+            lineas_gasto,
+            key=lambda linea: float(linea.get("debito") or 0),
+            reverse=True
+        )[0]
+
+    reglas = []
+
+    for linea_factura in lineas_factura:
+        descripcion = linea_factura.get("descripcion")
+        palabras = generar_palabras_clave_descripcion_aprendida(descripcion)
+
+        if not palabras:
+            continue
+
+        palabras_clave = ", ".join(palabras)
+        concepto = linea_base.get("concepto_servicio")
+        cuenta = linea_base.get("cuenta_contable")
+        nombre_cuenta = linea_base.get("nombre_cuenta")
+
+        cursor.execute("""
+            SELECT id
+            FROM reglas_concepto_servicio
+            WHERE erp = 'SIIGO'
+              AND proveedor_nit = ?
+              AND concepto_servicio = ?
+              AND palabras_clave = ?
+            LIMIT 1
+        """, (proveedor_nit, concepto, palabras_clave))
+
+        existente = cursor.fetchone()
+
+        if existente:
+            regla_id = existente[0]
+            cursor.execute("""
+                UPDATE reglas_concepto_servicio
+                SET
+                    cuenta_contable = ?,
+                    nombre_cuenta = ?,
+                    item_type_erp = 'Account',
+                    item_code_erp = ?,
+                    prioridad = 20,
+                    activo = 1
+                WHERE id = ?
+            """, (
+                cuenta,
+                nombre_cuenta,
+                cuenta,
+                regla_id
+            ))
+            accion = "actualizada"
+        else:
+            cursor.execute("""
+                INSERT INTO reglas_concepto_servicio (
+                    erp,
+                    proveedor_nit,
+                    concepto_servicio,
+                    palabras_clave,
+                    cuenta_contable,
+                    nombre_cuenta,
+                    item_type_erp,
+                    item_code_erp,
+                    prioridad,
+                    activo
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                "SIIGO",
+                proveedor_nit,
+                concepto,
+                palabras_clave,
+                cuenta,
+                nombre_cuenta,
+                "Account",
+                cuenta,
+                20,
+                1
+            ))
+            regla_id = cursor.lastrowid
+            accion = "creada"
+
+        cursor.execute("""
+            UPDATE facturas_lineas
+            SET
+                concepto_servicio = ?,
+                clasificacion_fuente = 'respuesta_manual_aprendida',
+                clasificacion_confianza = 100
+            WHERE id = ?
+        """, (
+            concepto,
+            linea_factura.get("id")
+        ))
+
+        reglas.append({
+            "regla_id": regla_id,
+            "accion": accion,
+            "linea_factura_id": linea_factura.get("id"),
+            "descripcion": descripcion,
+            "concepto_servicio": concepto,
+            "cuenta_contable": cuenta,
+            "palabras_clave": palabras_clave
+        })
+
+    return reglas
 
 
 @app.get("/health")
@@ -3416,6 +3599,15 @@ def procesar_respuesta_revision(payload: dict = Body(...)):
         factura = dict(factura_row)
 
         cursor.execute("""
+            SELECT *
+            FROM facturas_lineas
+            WHERE factura_id = ?
+            ORDER BY id
+        """, (factura_id,))
+
+        lineas_factura = [dict(row) for row in cursor.fetchall()]
+
+        cursor.execute("""
             SELECT id
             FROM causaciones
             WHERE factura_id = ?
@@ -3477,6 +3669,13 @@ def procesar_respuesta_revision(payload: dict = Body(...)):
             ))
 
             upsert_mapeo_erp_desde_linea_manual(cursor, factura, linea)
+
+        reglas_aprendidas = upsert_reglas_aprendidas_desde_respuesta_manual(
+            cursor,
+            factura,
+            lineas_factura,
+            lineas
+        )
 
         cursor.execute("""
             INSERT INTO causaciones (
@@ -3548,6 +3747,8 @@ def procesar_respuesta_revision(payload: dict = Body(...)):
             "total_pagar_factura": resultado_valores["total_pagar_factura"],
             "iva_factura": resultado_valores["iva_factura"],
             "valor_gasto_factura": resultado_valores["valor_gasto_factura"],
+            "reglas_aprendidas": reglas_aprendidas,
+            "total_reglas_aprendidas": len(reglas_aprendidas),
             "lineas": lineas
         }
 
@@ -3933,6 +4134,86 @@ def obtener_env_int(nombre: str):
     return int(valor)
 
 
+def ajustar_redondeo_items_siigo(items: list, total_pagar: float, iva: float):
+    if not items or iva <= 0 or total_pagar <= 0:
+        return None
+
+    items_gravados = [
+        item
+        for item in items
+        if item.get("taxes")
+    ]
+
+    if not items_gravados:
+        return None
+
+    base_gravada = round(
+        sum(float(item.get("price") or 0) for item in items_gravados),
+        2
+    )
+
+    if base_gravada <= 0:
+        return None
+
+    tasa = iva / base_gravada
+
+    if tasa <= 0:
+        tasa = 0.19
+
+    def calcular_total():
+        total = 0
+
+        for item in items:
+            precio = float(item.get("price") or 0)
+
+            if item.get("taxes"):
+                total += precio * (1 + tasa)
+            else:
+                total += precio
+
+        return round(total, 2)
+
+    total_calculado = calcular_total()
+    diferencia = round(total_calculado - total_pagar, 2)
+
+    if not diferencia or abs(diferencia) > 0.02:
+        return {
+            "aplicado": False,
+            "total_calculado": total_calculado,
+            "total_pagar": total_pagar,
+            "diferencia": diferencia,
+            "motivo": "Diferencia fuera del rango de redondeo automatico."
+        }
+
+    item_ajustado = items_gravados[-1]
+    precio_original = round(float(item_ajustado.get("price") or 0), 2)
+    ajuste_base = diferencia / (1 + tasa)
+    precio_ajustado = round(precio_original - ajuste_base, 2)
+
+    if precio_ajustado <= 0:
+        return {
+            "aplicado": False,
+            "total_calculado": total_calculado,
+            "total_pagar": total_pagar,
+            "diferencia": diferencia,
+            "motivo": "El ajuste dejaria el precio del item en cero o negativo."
+        }
+
+    item_ajustado["price"] = precio_ajustado
+    total_ajustado = calcular_total()
+
+    return {
+        "aplicado": True,
+        "tasa": round(tasa, 6),
+        "precio_original": precio_original,
+        "precio_ajustado": precio_ajustado,
+        "total_calculado": total_calculado,
+        "total_ajustado": total_ajustado,
+        "total_pagar": total_pagar,
+        "diferencia": diferencia
+    }
+
+
 def construir_payload_siigo_compra_desde_causacion(causacion_id: int):
     document_id = obtener_env_int("SIIGO_DOCUMENT_ID_COMPRA")
     payment_id = obtener_env_int("SIIGO_PAYMENT_ID_COMPRA")
@@ -4064,6 +4345,7 @@ def construir_payload_siigo_compra_desde_causacion(causacion_id: int):
     primer_mapeo = mapeos_usados[0] if mapeos_usados else {}
     document_id = int(primer_mapeo.get("document_id_erp") or document_id)
     payment_id = int(primer_mapeo.get("payment_id_erp") or payment_id)
+    ajuste_redondeo_siigo = ajustar_redondeo_items_siigo(items, total_pagar, iva)
     conn.close()
 
     datos_factura_proveedor = separar_prefijo_numero_siigo(
@@ -4113,6 +4395,7 @@ def construir_payload_siigo_compra_desde_causacion(causacion_id: int):
             "tax_id_iva_19": tax_id_iva_19,
             "mapeos_usados": mapeos_usados,
             "items_generados": len(items),
+            "ajuste_redondeo_siigo": ajuste_redondeo_siigo,
             "modo": "SIMULACION_NO_ENVIADO"
         }
     }
