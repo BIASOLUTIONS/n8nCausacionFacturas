@@ -686,8 +686,18 @@ CONCEPTOS_SERVICIO_KEYWORDS = [
     ("CERTIFICADO_SSL", ["certificado ssl", "ssl", "tls", "https"]),
     ("HOSTING", ["hosting", "hospedaje", "web hosting", "alojamiento web"]),
     ("DOMINIO", ["dominio", "domain", "renovacion dominio"]),
-    ("CORREO", ["correo", "email", "e mail", "mail", "office 365", "google workspace"]),
-    ("LICENCIA", ["licencia", "license", "suscripcion", "subscription"]),
+    ("CORREO", ["correo", "email", "e mail", "mail", "google workspace"]),
+    ("LICENCIA", [
+        "licencia",
+        "license",
+        "suscripcion",
+        "subscription",
+        "microsoft 365",
+        "office 365",
+        "business standard",
+        "m365",
+        "software assurance"
+    ]),
     ("SERVIDOR", ["servidor", "server", "vps", "cloud", "nube"]),
     ("DESARROLLO_SOFTWARE", ["desarrollo software", "software", "programacion", "aplicacion"]),
     ("SERVICIOS_TI", ["servicios ti", "consultoria ti", "tecnologia", "sistemas"]),
@@ -1601,7 +1611,7 @@ def construir_propuesta_causacion(factura_id: int):
             "numero_factura": factura.get("numero_factura"),
             "requiere_revision": True,
             "confianza": 0,
-            "mensaje": "No existe histÃ³rico contable para este proveedor.",
+                "mensaje": "No existe historico contable para este proveedor.",
             "propuesta": []
         }
 
@@ -1649,7 +1659,7 @@ def construir_propuesta_causacion(factura_id: int):
                 "confianza": 0,
                 "requiere_revision": True,
                 "estado": "REQUIERE_REVISION_CONCEPTO",
-                "mensaje": "Una o mÃƒÂ¡s lÃƒÂ­neas de la factura no pudieron clasificarse por producto/servicio.",
+                "mensaje": "Una o mas lineas de la factura no pudieron clasificarse por producto/servicio.",
                 "clasificacion": clasificacion,
                 "propuesta": []
             }
@@ -1742,7 +1752,7 @@ def construir_propuesta_causacion(factura_id: int):
                 "confianza": 0,
                 "requiere_revision": True,
                 "estado": "REQUIERE_MAPEO_ERP",
-                "mensaje": "Una o mÃƒÂ¡s lÃƒÂ­neas clasificadas no tienen mapeo ERP suficiente.",
+                "mensaje": "Una o mas lineas clasificadas no tienen mapeo ERP suficiente.",
                 "faltantes_mapeo": faltantes_mapeo,
                 "clasificacion": clasificacion,
                 "propuesta": []
@@ -3173,10 +3183,21 @@ def causar_factura(factura_id: int):
             content={
                 "ok": False,
                 "estado": estado_revision,
-                "mensaje": propuesta.get("mensaje", "La factura requiere revisiÃ³n antes de causar."),
+                "mensaje": propuesta.get("mensaje", "La factura requiere revision antes de causar."),
                 "factura_id": factura_id,
+                "proveedor_nit": propuesta.get("proveedor_nit"),
+                "proveedor_nombre": propuesta.get("proveedor_nombre"),
+                "numero_factura": propuesta.get("numero_factura"),
+                "fecha_factura": propuesta.get("fecha_factura"),
+                "subtotal": propuesta.get("subtotal"),
+                "iva": propuesta.get("iva"),
+                "total_pagar": propuesta.get("total_pagar"),
+                "valor_gasto": propuesta.get("valor_gasto"),
+                "confianza": propuesta.get("confianza"),
+                "total_historicos": propuesta.get("total_historicos"),
                 "clasificacion": propuesta.get("clasificacion"),
-                "faltantes_mapeo": propuesta.get("faltantes_mapeo")
+                "faltantes_mapeo": propuesta.get("faltantes_mapeo"),
+                "propuesta": propuesta.get("propuesta", [])
             }
         )
 
