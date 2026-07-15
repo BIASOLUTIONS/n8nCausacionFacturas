@@ -402,14 +402,14 @@
         "fromEmail": "={{ $('Variables').item.json.correo_remitente }}",
         "toEmail": "={{ $('Variables').item.json.correo_destino }}",
         "subject": "=Factura causada desde respuesta manual - {{ $json.numero_factura }}",
-        "html": "=<h3>Factura causada correctamente</h3>\n\n<p>La respuesta manual fue procesada correctamente.</p>\n\n<p><b>Estado:</b> {{ $json.estado }}</p>\n<p><b>Mensaje:</b> {{ $json.mensaje }}</p>\n<p><b>Factura ID:</b> {{ $json.factura_id }}</p>\n<p><b>Causación ID:</b> {{ $json.causacion_id }}</p>\n<p><b>Proveedor:</b> {{ $json.proveedor_nombre }}</p>\n<p><b>NIT:</b> {{ $json.proveedor_nit }}</p>\n<p><b>Número factura:</b> {{ $json.numero_factura }}</p>\n\n<hr>\n\n<p><b>Total débito:</b> {{ $json.total_debito }}</p>\n<p><b>Total crédito:</b> {{ $json.total_credito }}</p>\n\n<p>La contabilización también fue guardada como histórico para próximas facturas del proveedor.</p>",
+        "html": "=<h3>Factura causada correctamente</h3>\n\n<p>La respuesta manual fue procesada correctamente y enviada a SIIGO.</p>\n\n<p><b>Estado:</b> {{ $json.estado }}</p>\n<p><b>Mensaje:</b> {{ $json.mensaje }}</p>\n<p><b>Factura ID:</b> {{ $json.factura_id }}</p>\n<p><b>Causación ID:</b> {{ $json.causacion_id }}</p>\n<p><b>SIIGO ID:</b> {{ $json.siigo_id }}</p>\n<p><b>Comprobante SIIGO:</b> {{ $json.siigo_name }}</p>\n<p><b>Proveedor:</b> {{ $json.proveedor_nombre }}</p>\n<p><b>NIT:</b> {{ $json.proveedor_nit }}</p>\n<p><b>Número factura:</b> {{ $json.numero_factura }}</p>\n\n<hr>\n\n<p><b>Total débito:</b> {{ $json.total_debito }}</p>\n<p><b>Total crédito:</b> {{ $json.total_credito }}</p>\n\n<p>La contabilización también fue guardada como histórico para próximas facturas del proveedor.</p>",
         "options": {}
       },
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
-        -48,
-        -736
+        620,
+        -760
       ],
       "id": "299d31d9-9bc2-4258-9954-e8c201c11fb7",
       "name": "Notificar respuesta procesada",
@@ -945,6 +945,98 @@
           "name": "SMTP account"
         }
       }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://127.0.0.1:8000/siigo/enviar-compra/{{ $json.causacion_id }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        0,
+        -608
+      ],
+      "id": "e5d0c1f9-7a64-4b7a-a068-84d19176a41d",
+      "name": "Enviar respuesta manual a SIIGO"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "bddbe5a4-bb1e-48f2-8abb-48422e0c79bc",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        220,
+        -608
+      ],
+      "id": "b8bf2d31-f4cc-4e18-b13e-084409e2d2b9",
+      "name": "¿SIIGO manual exitoso?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const causacion = $('Procesar respuesta revisión').item.json || {};\nconst siigo = $json || {};\nconst respuesta = siigo.respuesta_siigo || {};\n\nreturn [{\n  json: {\n    ...causacion,\n    estado: siigo.estado || causacion.estado,\n    mensaje: siigo.mensaje || causacion.mensaje,\n    siigo_ok: siigo.ok === true,\n    siigo_id: siigo.siigo_id || respuesta.id || '',\n    siigo_name: respuesta.name || '',\n    siigo_number: respuesta.number || '',\n    respuesta_siigo: respuesta,\n    payload_siigo: siigo.payload_enviado || null\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        -704
+      ],
+      "id": "1dffd83a-eac2-42ae-9b32-c998da9a2e79",
+      "name": "Preparar resultado SIIGO manual"
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Variables').item.json.correo_remitente }}",
+        "toEmail": "={{ $('Variables').item.json.correo_destino }}",
+        "subject": "=Error enviando respuesta manual a SIIGO - Causación {{ $('Procesar respuesta revisión').item.json.causacion_id }}",
+        "html": "=<h3>Error enviando respuesta manual a SIIGO</h3>\n\n<p>La factura fue causada desde la respuesta manual, pero SIIGO no confirmó el envío.</p>\n\n<p><b>Factura ID:</b> {{ $('Procesar respuesta revisión').item.json.factura_id }}</p>\n<p><b>Causación ID:</b> {{ $('Procesar respuesta revisión').item.json.causacion_id }}</p>\n<p><b>Proveedor:</b> {{ $('Procesar respuesta revisión').item.json.proveedor_nombre }}</p>\n<p><b>NIT:</b> {{ $('Procesar respuesta revisión').item.json.proveedor_nit }}</p>\n<p><b>Número factura:</b> {{ $('Procesar respuesta revisión').item.json.numero_factura }}</p>\n\n<hr>\n\n<p><b>Estado SIIGO:</b> {{ $json.estado || $json.error || 'ERROR_SIIGO' }}</p>\n<p><b>Mensaje:</b> {{ $json.mensaje || $json.detail || $json.error || 'No se recibió detalle del error.' }}</p>\n\n<p>El correo no fue archivado por este flujo. Revise SIIGO y luego ejecute manualmente <code>POST /siigo/enviar-compra/{{ $('Procesar respuesta revisión').item.json.causacion_id }}</code> si corresponde.</p>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        440,
+        -480
+      ],
+      "id": "e43eecbd-a691-4518-b161-cad721839749",
+      "name": "Notificar error SIIGO manual",
+      "credentials": {
+        "smtp": {
+          "id": "3c5S6AQq2Co2Uy1k",
+          "name": "SMTP account"
+        }
+      }
     }
   ],
   "pinData": {},
@@ -1095,12 +1187,7 @@
       "main": [
         [
           {
-            "node": "Notificar respuesta procesada",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Preparar postproceso integrado",
+            "node": "Enviar respuesta manual a SIIGO",
             "type": "main",
             "index": 0
           }
@@ -1331,6 +1418,56 @@
       ]
     },
     "Notificar error SIIGO": {
+      "main": [
+        []
+      ]
+    },
+    "Enviar respuesta manual a SIIGO": {
+      "main": [
+        [
+          {
+            "node": "¿SIIGO manual exitoso?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿SIIGO manual exitoso?": {
+      "main": [
+        [
+          {
+            "node": "Preparar resultado SIIGO manual",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notificar error SIIGO manual",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar resultado SIIGO manual": {
+      "main": [
+        [
+          {
+            "node": "Notificar respuesta procesada",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Preparar postproceso integrado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notificar error SIIGO manual": {
       "main": [
         []
       ]
