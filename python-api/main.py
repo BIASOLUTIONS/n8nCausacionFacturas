@@ -4155,7 +4155,13 @@ def ajustar_redondeo_items_siigo(items: list, total_pagar: float, iva: float):
     if base_gravada <= 0:
         return None
 
-    tasa = iva / base_gravada
+    try:
+        tasa = float(os.getenv("SIIGO_TASA_IVA_19", "0.19"))
+    except ValueError:
+        tasa = 0.19
+
+    if tasa > 1:
+        tasa = tasa / 100
 
     if tasa <= 0:
         tasa = 0.19
@@ -4176,7 +4182,16 @@ def ajustar_redondeo_items_siigo(items: list, total_pagar: float, iva: float):
     total_calculado = calcular_total()
     diferencia = round(total_calculado - total_pagar, 2)
 
-    if not diferencia or abs(diferencia) > 0.02:
+    if not diferencia:
+        return {
+            "aplicado": False,
+            "total_calculado": total_calculado,
+            "total_pagar": total_pagar,
+            "diferencia": diferencia,
+            "motivo": "No requiere ajuste de redondeo."
+        }
+
+    if abs(diferencia) > 0.02:
         return {
             "aplicado": False,
             "total_calculado": total_calculado,
