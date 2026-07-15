@@ -119,6 +119,10 @@ IMAP_SOURCE_MAILBOX=INBOX
 IMAP_ARCHIVE_MAILBOX=Facturas Procesadas
 
 NITS_CLIENTE_PERMITIDOS=
+
+# Si queda true, una descripcion desconocida puede heredar el unico concepto ERP activo del proveedor.
+# Si el proveedor tiene varios conceptos activos, el sistema seguira pidiendo revision.
+AUTO_CLASIFICAR_CONCEPTO_UNICO_PROVEEDOR=true
 ```
 
 No subir `.env.production` ni `python-api/.env.production` al repo.
@@ -494,6 +498,33 @@ https://causacionfacturas.biasolutions.co/clasificaciones/conceptos
 ```
 
 Solo hacerlo mientras el backend este expuesto temporalmente.
+
+Corregir o crear un mapeo para proximas facturas:
+
+```text
+POST /clasificaciones/mapeo-erp
+```
+
+Ejemplo para un producto nuevo de TD Synnex:
+
+```json
+{
+  "proveedor_nit": "NIT_TD_SYNNEX",
+  "proveedor_nombre": "TD Synnex",
+  "concepto_servicio": "LICENCIA",
+  "cuenta_contable": "61553001",
+  "nombre_cuenta": "Servicios TI",
+  "item_type_erp": "Account",
+  "item_code_erp": "61553001",
+  "item_description_erp": "Servicios TI",
+  "palabras_clave": "MICROSOFT 365, BUSINESS STANDARD",
+  "prioridad": 20,
+  "activo": true,
+  "observacion": "Correccion manual para proximas facturas"
+}
+```
+
+Si el concepto anterior no era correcto, este endpoint permite actualizar el mapeo del proveedor y agregar palabras clave para que las siguientes facturas clasifiquen mejor.
 
 ## 11. Como construir el Excel historico
 

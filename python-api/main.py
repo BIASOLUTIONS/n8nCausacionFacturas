@@ -22,6 +22,10 @@ ADJUNTOS_PATH = os.path.join(BASE_PATH, "adjuntos")
 PROCESADAS_PATH = os.path.join(BASE_PATH, "procesadas")
 ERRORES_PATH = os.path.join(BASE_PATH, "errores")
 DB_PATH = os.path.join(BASE_PATH, "facturas_ai.db")
+AUTO_CLASIFICAR_CONCEPTO_UNICO_PROVEEDOR = (
+    os.getenv("AUTO_CLASIFICAR_CONCEPTO_UNICO_PROVEEDOR", "true").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
 
 os.makedirs(ADJUNTOS_PATH, exist_ok=True)
 os.makedirs(PROCESADAS_PATH, exist_ok=True)
@@ -1009,6 +1013,43 @@ def clasificar_linea_por_mapeo(descripcion, mapeos):
     return candidatos[0]
 
 
+def clasificar_linea_por_concepto_unico_proveedor(descripcion, mapeos):
+    if not AUTO_CLASIFICAR_CONCEPTO_UNICO_PROVEEDOR:
+        return None
+
+    if not descripcion:
+        return None
+
+    conceptos_no_heredables = {"IVA", "CXP"}
+    candidatos_por_concepto = {}
+
+    for mapeo in mapeos:
+        concepto = mapeo.get("concepto_servicio")
+
+        if not concepto or concepto in conceptos_no_heredables:
+            continue
+
+        if not mapeo.get("item_type_erp") or not mapeo.get("item_code_erp"):
+            continue
+
+        candidatos_por_concepto.setdefault(concepto, []).append(mapeo)
+
+    if len(candidatos_por_concepto) != 1:
+        return None
+
+    concepto = next(iter(candidatos_por_concepto.keys()))
+    mapeo = candidatos_por_concepto[concepto][0]
+
+    return {
+        "concepto_servicio": concepto,
+        "clasificacion_fuente": "mapeo_erp_concepto_unico_proveedor",
+        "clasificacion_confianza": 60,
+        "regla_id": None,
+        "mapeo_erp_id": mapeo.get("id"),
+        "coincidencias": ["concepto_unico_proveedor"]
+    }
+
+
 def clasificar_lineas_factura(factura_id: int, guardar: bool = True):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -1064,6 +1105,12 @@ def clasificar_lineas_factura(factura_id: int, guardar: bool = True):
 
         if not clasificacion:
             clasificacion = clasificar_linea_por_mapeo(linea.get("descripcion"), mapeos)
+
+        if not clasificacion:
+            clasificacion = clasificar_linea_por_concepto_unico_proveedor(
+                linea.get("descripcion"),
+                mapeos
+            )
 
         if not clasificacion:
             clasificacion = {
@@ -2295,6 +2342,214 @@ def listar_conceptos_clasificacion():
         "conceptos_base": conceptos_base,
         "reglas_activas": reglas,
         "mapeos_por_concepto": mapeos
+    }
+
+
+@app.post("/clasificaciones/mapeo-erp")
+def guardar_mapeo_erp_clasificacion(payload: dict = Body(...)):
+    proveedor_nit = valor_texto_excel(payload.get("proveedor_nit"))
+    proveedor_nombre = valor_texto_excel(payload.get("proveedor_nombre"))
+    concepto_servicio = valor_texto_excel(payload.get("concepto_servicio"))
+    cuenta_contable = valor_texto_excel(payload.get("cuenta_contable"))
+    nombre_cuenta = valor_texto_excel(payload.get("nombre_cuenta"))
+    item_type_erp = valor_texto_excel(payload.get("item_type_erp")) or "Account"
+    item_code_erp = valor_texto_excel(payload.get("item_code_erp")) or cuenta_contable
+    item_description_erp = valor_texto_excel(payload.get("item_description_erp")) or nombre_cuenta
+    palabras_clave = valor_texto_excel(payload.get("palabras_clave"))
+    activo = valor_activo_excel(payload.get("activo", True))
+    prioridad = int(valor_numero_excel(payload.get("prioridad"), 20))
+
+    if concepto_servicio:
+        concepto_servicio = concepto_servicio.strip().upper().replace(" ", "_")
+
+    if not proveedor_nit or not concepto_servicio:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "estado": "DATOS_INCOMPLETOS",
+                "mensaje": "proveedor_nit y concepto_servicio son obligatorios."
+            }
+        )
+
+    if not cuenta_contable and not item_code_erp:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "estado": "DATOS_INCOMPLETOS",
+                "mensaje": "Debe enviar cuenta_contable o item_code_erp."
+            }
+        )
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id
+        FROM mapeo_erp
+        WHERE proveedor_nit = ?
+          AND concepto_servicio = ?
+        ORDER BY activo DESC, id ASC
+        LIMIT 1
+    """, (proveedor_nit, concepto_servicio))
+
+    existente = cursor.fetchone()
+
+    if existente:
+        mapeo_id = existente["id"]
+        cursor.execute("""
+            UPDATE mapeo_erp
+            SET
+                erp = ?,
+                proveedor_nombre = ?,
+                cuenta_contable = ?,
+                nombre_cuenta = ?,
+                item_type_erp = ?,
+                item_code_erp = ?,
+                item_description_erp = ?,
+                document_id_erp = ?,
+                payment_id_erp = ?,
+                tax_id_erp = ?,
+                activo = ?,
+                observacion = ?
+            WHERE id = ?
+        """, (
+            valor_texto_excel(payload.get("erp")) or "SIIGO",
+            proveedor_nombre,
+            cuenta_contable,
+            nombre_cuenta,
+            item_type_erp,
+            item_code_erp,
+            item_description_erp,
+            valor_texto_excel(payload.get("document_id_erp")),
+            valor_texto_excel(payload.get("payment_id_erp")),
+            valor_texto_excel(payload.get("tax_id_erp")),
+            activo,
+            valor_texto_excel(payload.get("observacion")) or "Actualizado desde Swagger",
+            mapeo_id
+        ))
+        accion = "actualizado"
+    else:
+        cursor.execute("""
+            INSERT INTO mapeo_erp (
+                erp,
+                proveedor_nit,
+                proveedor_nombre,
+                concepto_servicio,
+                cuenta_contable,
+                nombre_cuenta,
+                item_type_erp,
+                item_code_erp,
+                item_description_erp,
+                document_id_erp,
+                payment_id_erp,
+                tax_id_erp,
+                activo,
+                observacion
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            valor_texto_excel(payload.get("erp")) or "SIIGO",
+            proveedor_nit,
+            proveedor_nombre,
+            concepto_servicio,
+            cuenta_contable,
+            nombre_cuenta,
+            item_type_erp,
+            item_code_erp,
+            item_description_erp,
+            valor_texto_excel(payload.get("document_id_erp")),
+            valor_texto_excel(payload.get("payment_id_erp")),
+            valor_texto_excel(payload.get("tax_id_erp")),
+            activo,
+            valor_texto_excel(payload.get("observacion")) or "Creado desde Swagger"
+        ))
+        mapeo_id = cursor.lastrowid
+        accion = "creado"
+
+    regla_id = None
+
+    if palabras_clave:
+        cursor.execute("""
+            SELECT id
+            FROM reglas_concepto_servicio
+            WHERE proveedor_nit = ?
+              AND concepto_servicio = ?
+              AND palabras_clave = ?
+            LIMIT 1
+        """, (proveedor_nit, concepto_servicio, palabras_clave))
+
+        regla_existente = cursor.fetchone()
+
+        if regla_existente:
+            regla_id = regla_existente["id"]
+            cursor.execute("""
+                UPDATE reglas_concepto_servicio
+                SET
+                    cuenta_contable = ?,
+                    nombre_cuenta = ?,
+                    item_type_erp = ?,
+                    item_code_erp = ?,
+                    tax_id_erp = ?,
+                    prioridad = ?,
+                    activo = 1
+                WHERE id = ?
+            """, (
+                cuenta_contable,
+                nombre_cuenta,
+                item_type_erp,
+                item_code_erp,
+                valor_texto_excel(payload.get("tax_id_erp")),
+                prioridad,
+                regla_id
+            ))
+        else:
+            cursor.execute("""
+                INSERT INTO reglas_concepto_servicio (
+                    erp,
+                    proveedor_nit,
+                    concepto_servicio,
+                    palabras_clave,
+                    cuenta_contable,
+                    nombre_cuenta,
+                    item_type_erp,
+                    item_code_erp,
+                    tax_id_erp,
+                    prioridad,
+                    activo
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            """, (
+                valor_texto_excel(payload.get("erp")) or "SIIGO",
+                proveedor_nit,
+                concepto_servicio,
+                palabras_clave,
+                cuenta_contable,
+                nombre_cuenta,
+                item_type_erp,
+                item_code_erp,
+                valor_texto_excel(payload.get("tax_id_erp")),
+                prioridad
+            ))
+            regla_id = cursor.lastrowid
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "ok": True,
+        "accion": accion,
+        "mapeo_erp_id": mapeo_id,
+        "regla_id": regla_id,
+        "proveedor_nit": proveedor_nit,
+        "proveedor_nombre": proveedor_nombre,
+        "concepto_servicio": concepto_servicio,
+        "cuenta_contable": cuenta_contable,
+        "item_type_erp": item_type_erp,
+        "item_code_erp": item_code_erp,
+        "palabras_clave": palabras_clave
     }
 
 
