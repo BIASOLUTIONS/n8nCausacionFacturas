@@ -187,14 +187,14 @@
         "fromEmail": "={{ $('Variables').item.json.correo_remitente }}",
         "toEmail": "={{ $('Variables').item.json.correo_destino }}",
         "subject": "=Factura causada automáticamente - {{ $json.numero_factura }}",
-        "html": "=<h3>Factura causada automáticamente</h3>\n\n<p>La factura fue procesada y causada automáticamente en modo simulación.</p>\n\n<p><b>Estado:</b> {{ $json.estado }}</p>\n<p><b>Proveedor:</b> {{ $json.proveedor_nombre }}</p>\n<p><b>NIT:</b> {{ $json.proveedor_nit }}</p>\n<p><b>Número factura:</b> {{ $json.numero_factura }}</p>\n<p><b>Factura ID:</b> {{ $json.factura_id }}</p>\n<p><b>Causación ID:</b> {{ $json.causacion_id }}</p>\n<p><b>Confianza:</b> {{ $json.confianza }}%</p>\n\n<hr>\n\n<h4>Resumen contable</h4>\n\n<p><b>Total débito:</b> {{ $json.total_debito }}</p>\n<p><b>Total crédito:</b> {{ $json.total_credito }}</p>\n\n<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\">\n  <thead>\n    <tr>\n      <th>Tipo</th>\n      <th>Concepto</th>\n      <th>Cuenta</th>\n      <th>Nombre cuenta</th>\n      <th>Centro costo</th>\n      <th>Débito</th>\n      <th>Crédito</th>\n    </tr>\n  </thead>\n  <tbody>\n    {{ $json.lineas.map(l => `\n      <tr>\n        <td>${l.tipo}</td>\n        <td>${l.concepto_servicio || ''}</td>\n        <td>${l.cuenta_contable}</td>\n        <td>${l.nombre_cuenta}</td>\n        <td>${l.centro_costo || ''}</td>\n        <td>${l.debito}</td>\n        <td>${l.credito}</td>\n      </tr>\n    `).join('') }}\n  </tbody>\n</table>\n\n<hr>\n\n<p><b>Mensaje:</b> {{ $json.mensaje }}</p>",
+        "html": "=<h3>Factura causada y enviada a SIIGO</h3>\n\n<p>La factura fue procesada, causada automáticamente y enviada a SIIGO.</p>\n\n<p><b>Estado:</b> {{ $json.estado }}</p>\n<p><b>Proveedor:</b> {{ $json.proveedor_nombre }}</p>\n<p><b>NIT:</b> {{ $json.proveedor_nit }}</p>\n<p><b>Número factura:</b> {{ $json.numero_factura }}</p>\n<p><b>Factura ID:</b> {{ $json.factura_id }}</p>\n<p><b>Causación ID:</b> {{ $json.causacion_id }}</p>\n<p><b>SIIGO ID:</b> {{ $json.siigo_id }}</p>\n<p><b>Comprobante SIIGO:</b> {{ $json.siigo_name }}</p>\n<p><b>Confianza:</b> {{ $json.confianza }}%</p>\n\n<hr>\n\n<h4>Resumen contable</h4>\n\n<p><b>Total débito:</b> {{ $json.total_debito }}</p>\n<p><b>Total crédito:</b> {{ $json.total_credito }}</p>\n\n<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\">\n  <thead>\n    <tr>\n      <th>Tipo</th>\n      <th>Concepto</th>\n      <th>Cuenta</th>\n      <th>Nombre cuenta</th>\n      <th>Centro costo</th>\n      <th>Débito</th>\n      <th>Crédito</th>\n    </tr>\n  </thead>\n  <tbody>\n    {{ $json.lineas.map(l => `\n      <tr>\n        <td>${l.tipo}</td>\n        <td>${l.concepto_servicio || ''}</td>\n        <td>${l.cuenta_contable}</td>\n        <td>${l.nombre_cuenta}</td>\n        <td>${l.centro_costo || ''}</td>\n        <td>${l.debito}</td>\n        <td>${l.credito}</td>\n      </tr>\n    `).join('') }}\n  </tbody>\n</table>\n\n<hr>\n\n<p><b>Mensaje:</b> {{ $json.mensaje }}</p>",
         "options": {}
       },
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
-        928,
-        -144
+        1620,
+        -240
       ],
       "id": "d3330a69-a20f-456d-9ab5-f79750ac40f5",
       "name": "Notificar causación automática",
@@ -245,7 +245,7 @@
         "fromEmail": "={{ $('Variables').item.json.correo_remitente }}",
         "toEmail": "={{ $('Variables').item.json.correo_destino }}",
         "subject": "=Factura requiere revisión - {{ $json.estado || 'REQUIERE_REVISION' }} - Factura ID {{ $json.factura_id }}",
-        "html": "=<h3>Factura requiere revisión manual</h3>\n\n<p>La factura fue procesada, pero no pudo ser causada automáticamente.</p>\n\n<p><b>Estado:</b> {{ $json.estado }}</p>\n<p><b>Mensaje:</b> {{ $json.mensaje }}</p>\n<p><b>Factura ID:</b> {{ $json.factura_id }}</p>\n\n<p><b>Proveedor:</b> {{ $json.proveedor_nombre }}</p>\n<p><b>NIT proveedor:</b> {{ $json.proveedor_nit }}</p>\n<p><b>Número factura:</b> {{ $json.numero_factura }}</p>\n<p><b>Fecha:</b> {{ $json.fecha_factura }}</p>\n<p><b>Total:</b> {{ $json.total_pagar }}</p>\n\n{{ $json.clasificacion ? `\n<hr>\n<h4>Clasificación de conceptos</h4>\n<p><b>Total líneas:</b> ${$json.clasificacion.total_lineas}</p>\n<p><b>Líneas clasificadas:</b> ${$json.clasificacion.lineas_clasificadas}</p>\n<p><b>Líneas pendientes:</b> ${$json.clasificacion.lineas_pendientes}</p>\n<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\">\n  <thead>\n    <tr>\n      <th>Descripción</th>\n      <th>Concepto</th>\n      <th>Fuente</th>\n      <th>Confianza</th>\n    </tr>\n  </thead>\n  <tbody>\n    ${($json.clasificacion.clasificaciones || []).map(l => `\n      <tr>\n        <td>${l.descripcion || ''}</td>\n        <td>${l.concepto_servicio || 'PENDIENTE'}</td>\n        <td>${l.clasificacion_fuente || ''}</td>\n        <td>${l.clasificacion_confianza || 0}</td>\n      </tr>\n    `).join('')}\n  </tbody>\n</table>\n` : '' }}\n\n{{ $json.faltantes_mapeo ? `\n<hr>\n<h4>Mapeos ERP pendientes</h4>\n<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\">\n  <thead>\n    <tr>\n      <th>Concepto</th>\n      <th>Valor</th>\n      <th>Motivo</th>\n    </tr>\n  </thead>\n  <tbody>\n    ${($json.faltantes_mapeo || []).map(m => `\n      <tr>\n        <td>${m.concepto_servicio || ''}</td>\n        <td>${m.valor || ''}</td>\n        <td>${m.motivo || ''}</td>\n      </tr>\n    `).join('')}\n  </tbody>\n</table>\n` : '' }}\n\n<hr>\n\n<p>Para causar esta factura, responda este correo conservando el encabezado y editando la tabla:</p>\n\n<pre>\n#CAUSAR_FACTURA\n\nFACTURA_ID={{ $json.factura_id }}\nCENTRO_COSTO=ADMIN\n\nTIPO     CUENTA      NOMBRE_CUENTA                         CONCEPTO\nGASTO    61553001    Servicios TI                           HOSTING\nIVA      24081501    IVA descontable servicios 19%          IVA\nCXP      23359501    Otros proveedores                      CXP\n</pre>\n\n<p>Tambien se acepta copiar la tabla separada por tabuladores desde Excel.</p>\n\n<hr>\n\n<p><b>Conceptos sugeridos:</b></p>\n\n<table border=\"1\" cellpadding=\"5\" cellspacing=\"0\">\n  <thead>\n    <tr>\n      <th>Concepto</th>\n      <th>Uso típico</th>\n    </tr>\n  </thead>\n  <tbody>\n    <tr><td>HOSTING</td><td>Hosting, hospedaje web</td></tr>\n    <tr><td>DOMINIO</td><td>Dominios y renovaciones</td></tr>\n    <tr><td>CORREO</td><td>Correo, email, Google Workspace, Office 365</td></tr>\n    <tr><td>CERTIFICADO_SSL</td><td>SSL, TLS, certificados</td></tr>\n    <tr><td>LICENCIA</td><td>Licencias y suscripciones</td></tr>\n    <tr><td>SERVIDOR</td><td>Servidor, VPS, cloud</td></tr>\n    <tr><td>DESARROLLO_SOFTWARE</td><td>Software, desarrollo, programación</td></tr>\n    <tr><td>SERVICIOS_TI</td><td>Servicios de tecnología generales</td></tr>\n    <tr><td>TELECOMUNICACIONES</td><td>Internet, telefonía, televisión, cable</td></tr>\n    <tr><td>SERVICIOS_PUBLICOS</td><td>Energía, acueducto, aseo, alcantarillado, alumbrado</td></tr>\n    <tr><td>MANTENIMIENTO_EQUIPO</td><td>Mantenimiento de equipos</td></tr>\n    <tr><td>PAPELERIA</td><td>Papelería, útiles, fotocopias</td></tr>\n    <tr><td>COMBUSTIBLE</td><td>Gasolina, diésel, lubricantes</td></tr>\n    <tr><td>REGISTRO_MERCANTIL</td><td>Cámara de comercio, registro mercantil</td></tr>\n    <tr><td>EDUCATIVO</td><td>Cursos, capacitación, educación</td></tr>\n    <tr><td>ASESORIA</td><td>Asesoría o consultoría no TI</td></tr>\n    <tr><td>IVA</td><td>Línea de IVA</td></tr>\n    <tr><td>CXP</td><td>Cuenta por pagar</td></tr>\n  </tbody>\n</table>\n\n<p>Listado completo disponible en Swagger: <code>GET /clasificaciones/conceptos</code></p>\n\n<hr>\n\n<p><b>Instrucciones:</b></p>\n\n<ul>\n  <li>Indique tipo, cuenta, nombre de cuenta y concepto de servicio en la tabla.</li>\n  <li>No escriba valores manuales; el sistema toma débitos, créditos, IVA y CXP desde el XML/ZIP.</li>\n  <li>Use conceptos como HOSTING, DOMINIO, CORREO, CERTIFICADO_SSL, LICENCIA, SERVIDOR, TELECOMUNICACIONES, SERVICIOS_PUBLICOS, IVA o CXP.</li>\n  <li>Si el estado es REQUIERE_MAPEO_ERP, cree o ajuste el mapeo ERP antes de reenviar.</li>\n</ul>",
+        "html": "=<h3>Factura requiere revisión manual</h3>\n\n<p>La factura fue procesada, pero no pudo ser causada automáticamente.</p>\n\n<p><b>Estado:</b> {{ $json.estado }}</p>\n<p><b>Mensaje:</b> {{ $json.mensaje }}</p>\n<p><b>Factura ID:</b> {{ $json.factura_id }}</p>\n\n<p><b>Proveedor:</b> {{ $json.proveedor_nombre }}</p>\n<p><b>NIT proveedor:</b> {{ $json.proveedor_nit }}</p>\n<p><b>Número factura:</b> {{ $json.numero_factura }}</p>\n<p><b>Fecha:</b> {{ $json.fecha_factura }}</p>\n<p><b>Total:</b> {{ $json.total_pagar }}</p>\n\n{{ $json.clasificacion ? `\n<hr>\n<h4>Clasificación de conceptos</h4>\n<p><b>Total líneas:</b> ${$json.clasificacion.total_lineas}</p>\n<p><b>Líneas clasificadas:</b> ${$json.clasificacion.lineas_clasificadas}</p>\n<p><b>Líneas pendientes:</b> ${$json.clasificacion.lineas_pendientes}</p>\n<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\">\n  <thead>\n    <tr>\n      <th>Descripción</th>\n      <th>Concepto</th>\n      <th>Fuente</th>\n      <th>Confianza</th>\n    </tr>\n  </thead>\n  <tbody>\n    ${($json.clasificacion.clasificaciones || []).map(l => `\n      <tr>\n        <td>${l.descripcion || ''}</td>\n        <td>${l.concepto_servicio || 'PENDIENTE'}</td>\n        <td>${l.clasificacion_fuente || ''}</td>\n        <td>${l.clasificacion_confianza || 0}</td>\n      </tr>\n    `).join('')}\n  </tbody>\n</table>\n` : '' }}\n\n{{ $json.faltantes_mapeo ? `\n<hr>\n<h4>Mapeos ERP pendientes</h4>\n<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\">\n  <thead>\n    <tr>\n      <th>Concepto</th>\n      <th>Valor</th>\n      <th>Motivo</th>\n    </tr>\n  </thead>\n  <tbody>\n    ${($json.faltantes_mapeo || []).map(m => `\n      <tr>\n        <td>${m.concepto_servicio || ''}</td>\n        <td>${m.valor || ''}</td>\n        <td>${m.motivo || ''}</td>\n      </tr>\n    `).join('')}\n  </tbody>\n</table>\n` : '' }}\n\n<hr>\n\n<p>Para causar esta factura, responda este correo conservando el encabezado y editando la tabla:</p>\n\n<pre>\n#CAUSAR_FACTURA\n\nFACTURA_ID={{ $json.factura_id }}\nCENTRO_COSTO=ADMIN\n\nTIPO;CUENTA;CONCEPTO\nGASTO;52956001;RESTAURANTE\nIVA;24081501;IVA\nCXP;23359501;CXP\n</pre>\n\n<p>Tambien se acepta una linea por cuenta separada con punto y coma.</p>\n\n<hr>\n\n<p><b>Conceptos sugeridos:</b></p>\n\n<table border=\"1\" cellpadding=\"5\" cellspacing=\"0\">\n  <thead>\n    <tr>\n      <th>Concepto</th>\n      <th>Uso típico</th>\n    </tr>\n  </thead>\n  <tbody>\n    <tr><td>HOSTING</td><td>Hosting, hospedaje web</td></tr>\n    <tr><td>DOMINIO</td><td>Dominios y renovaciones</td></tr>\n    <tr><td>CORREO</td><td>Correo, email, Google Workspace, Office 365</td></tr>\n    <tr><td>CERTIFICADO_SSL</td><td>SSL, TLS, certificados</td></tr>\n    <tr><td>LICENCIA</td><td>Licencias y suscripciones</td></tr>\n    <tr><td>SERVIDOR</td><td>Servidor, VPS, cloud</td></tr>\n    <tr><td>DESARROLLO_SOFTWARE</td><td>Software, desarrollo, programación</td></tr>\n    <tr><td>SERVICIOS_TI</td><td>Servicios de tecnología generales</td></tr>\n    <tr><td>TELECOMUNICACIONES</td><td>Internet, telefonía, televisión, cable</td></tr>\n    <tr><td>SERVICIOS_PUBLICOS</td><td>Energía, acueducto, aseo, alcantarillado, alumbrado</td></tr>\n    <tr><td>MANTENIMIENTO_EQUIPO</td><td>Mantenimiento de equipos</td></tr>\n    <tr><td>PAPELERIA</td><td>Papelería, útiles, fotocopias</td></tr>\n    <tr><td>COMBUSTIBLE</td><td>Gasolina, diésel, lubricantes</td></tr>\n    <tr><td>REGISTRO_MERCANTIL</td><td>Cámara de comercio, registro mercantil</td></tr>\n    <tr><td>EDUCATIVO</td><td>Cursos, capacitación, educación</td></tr>\n    <tr><td>ASESORIA</td><td>Asesoría o consultoría no TI</td></tr>\n    <tr><td>IVA</td><td>Línea de IVA</td></tr>\n    <tr><td>CXP</td><td>Cuenta por pagar</td></tr>\n  </tbody>\n</table>\n\n<p>Listado completo disponible en Swagger: <code>GET /clasificaciones/conceptos</code></p>\n\n<hr>\n\n<p><b>Instrucciones:</b></p>\n\n<ul>\n  <li>Indique tipo, cuenta y concepto de servicio separados por punto y coma.</li>\n  <li>No escriba valores manuales; el sistema toma débitos, créditos, IVA y CXP desde el XML/ZIP.</li>\n  <li>Use conceptos como HOSTING, DOMINIO, CORREO, CERTIFICADO_SSL, LICENCIA, SERVIDOR, TELECOMUNICACIONES, SERVICIOS_PUBLICOS, RESTAURANTE, IVA o CXP.</li>\n  <li>Si el estado es REQUIERE_MAPEO_ERP, cree o ajuste el mapeo ERP antes de reenviar.</li>\n</ul>",
         "options": {}
       },
       "type": "n8n-nodes-base.emailSend",
@@ -426,7 +426,7 @@
         "fromEmail": "={{ $('Variables').item.json.correo_remitente }}",
         "toEmail": "={{ $('Variables').item.json.correo_destino }}",
         "subject": "Error procesando respuesta manual",
-        "html": "=<h3>No se pudo procesar la respuesta manual</h3>\n\n<p><b>Estado:</b> {{ $json.estado }}</p>\n<p><b>Mensaje:</b> {{ $json.mensaje }}</p>\n\n<hr>\n\n<p>Revise que la respuesta tenga este formato:</p>\n\n<pre>\n#CAUSAR_FACTURA\n\nFACTURA_ID=5\nCENTRO_COSTO=ADMIN\n\nTIPO     CUENTA      NOMBRE_CUENTA                         CONCEPTO\nGASTO    61553001    Servicios TI                           HOSTING\nIVA      24081501    IVA descontable servicios 19%          IVA\nCXP      23359501    Otros proveedores                      CXP\n</pre>\n\n<p>Los valores contables se toman desde el XML/ZIP de la factura, no desde la respuesta manual.</p>",
+        "html": "=<h3>No se pudo procesar la respuesta manual</h3>\n\n<p><b>Estado:</b> {{ $json.estado }}</p>\n<p><b>Mensaje:</b> {{ $json.mensaje }}</p>\n\n<hr>\n\n<p>Revise que la respuesta tenga este formato:</p>\n\n<pre>\n#CAUSAR_FACTURA\n\nFACTURA_ID=5\nCENTRO_COSTO=ADMIN\n\nTIPO;CUENTA;CONCEPTO\nGASTO;52956001;RESTAURANTE\nIVA;24081501;IVA\nCXP;23359501;CXP\n</pre>\n\n<p>Los valores contables se toman desde el XML/ZIP de la factura, no desde la respuesta manual. Los impuestos no IVA, propinas u otros cargos se suman al GASTO.</p>",
         "options": {}
       },
       "type": "n8n-nodes-base.emailSend",
@@ -540,8 +540,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1216,
-        -128
+        1620,
+        -80
       ],
       "id": "a8dbf0bd-f22a-47af-a2d4-1fb27449951c",
       "name": "Preparar postproceso integrado"
@@ -853,6 +853,98 @@
       ],
       "id": "a125e814-48b9-420b-84f9-99d98da66e7e",
       "name": "Postproceso completado"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://127.0.0.1:8000/siigo/enviar-compra/{{ $json.causacion_id }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        960,
+        -120
+      ],
+      "id": "275e967f-6c3a-4f42-a7e1-a0e51450c934",
+      "name": "Enviar compra a SIIGO"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "0ad0a117-cb06-4ddb-855e-ff3c8cdec235",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1180,
+        -120
+      ],
+      "id": "980dad30-16f8-41d8-9897-af96f9834d1b",
+      "name": "¿SIIGO exitoso?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const causacion = $('Causar factura automáticamente').item.json || {};\nconst siigo = $json || {};\nconst respuesta = siigo.respuesta_siigo || {};\n\nreturn [{\n  json: {\n    ...causacion,\n    estado: siigo.estado || causacion.estado,\n    mensaje: siigo.mensaje || causacion.mensaje,\n    siigo_ok: siigo.ok === true,\n    siigo_id: siigo.siigo_id || respuesta.id || '',\n    siigo_name: respuesta.name || '',\n    siigo_number: respuesta.number || '',\n    respuesta_siigo: respuesta,\n    payload_siigo: siigo.payload_enviado || null\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        -160
+      ],
+      "id": "7b3f5e28-2abe-46ff-8f47-42e7f41e6b53",
+      "name": "Preparar resultado SIIGO"
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Variables').item.json.correo_remitente }}",
+        "toEmail": "={{ $('Variables').item.json.correo_destino }}",
+        "subject": "=Error enviando factura a SIIGO - Causación {{ $('Causar factura automáticamente').item.json.causacion_id }}",
+        "html": "=<h3>Error enviando compra a SIIGO</h3>\n\n<p>La factura fue causada en la base interna, pero SIIGO no confirmó el envío.</p>\n\n<p><b>Factura ID:</b> {{ $('Causar factura automáticamente').item.json.factura_id }}</p>\n<p><b>Causación ID:</b> {{ $('Causar factura automáticamente').item.json.causacion_id }}</p>\n<p><b>Proveedor:</b> {{ $('Causar factura automáticamente').item.json.proveedor_nombre }}</p>\n<p><b>NIT:</b> {{ $('Causar factura automáticamente').item.json.proveedor_nit }}</p>\n<p><b>Número factura:</b> {{ $('Causar factura automáticamente').item.json.numero_factura }}</p>\n\n<hr>\n\n<p><b>Estado SIIGO:</b> {{ $json.estado || $json.error || 'ERROR_SIIGO' }}</p>\n<p><b>Mensaje:</b> {{ $json.mensaje || $json.detail || $json.error || 'No se recibió detalle del error.' }}</p>\n\n<p>El correo no fue archivado por este flujo. Revise SIIGO y luego ejecute manualmente <code>POST /siigo/enviar-compra/{{ $('Causar factura automáticamente').item.json.causacion_id }}</code> si corresponde.</p>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1400,
+        80
+      ],
+      "id": "61614083-b4b4-484e-a405-ebcc74515ba3",
+      "name": "Notificar error SIIGO",
+      "credentials": {
+        "smtp": {
+          "id": "3c5S6AQq2Co2Uy1k",
+          "name": "SMTP account"
+        }
+      }
     }
   ],
   "pinData": {},
@@ -934,12 +1026,7 @@
       "main": [
         [
           {
-            "node": "Notificar causación automática",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Preparar postproceso integrado",
+            "node": "Enviar compra a SIIGO",
             "type": "main",
             "index": 0
           }
@@ -1197,6 +1284,56 @@
           }
         ]
       ]
+    },
+    "Enviar compra a SIIGO": {
+      "main": [
+        [
+          {
+            "node": "¿SIIGO exitoso?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿SIIGO exitoso?": {
+      "main": [
+        [
+          {
+            "node": "Preparar resultado SIIGO",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notificar error SIIGO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar resultado SIIGO": {
+      "main": [
+        [
+          {
+            "node": "Notificar causación automática",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Preparar postproceso integrado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notificar error SIIGO": {
+      "main": [
+        []
+      ]
     }
   },
   "active": false,
@@ -1214,4 +1351,3 @@
   "id": "Nlg3whaDbWv5HvRk",
   "tags": []
 }
-

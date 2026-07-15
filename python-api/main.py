@@ -1559,12 +1559,14 @@ def construir_propuesta_causacion(factura_id: int):
     subtotal = round(float(factura.get("subtotal") or 0), 2)
     total_sin_impuestos = round(float(factura.get("total_sin_impuestos") or 0), 2)
 
-    if subtotal > 0:
+    if total_pagar > 0:
+        valor_gasto = round(total_pagar - iva, 2)
+    elif subtotal > 0:
         valor_gasto = subtotal
     elif total_sin_impuestos > 0:
         valor_gasto = total_sin_impuestos
     else:
-        valor_gasto = round(total_pagar - iva, 2)
+        valor_gasto = 0
 
     clasificacion = clasificar_lineas_factura(factura_id, guardar=True)
 
@@ -1936,6 +1938,9 @@ def normalizar_tipo_linea_respuesta(tipo):
     if tipo_normalizado == "CUENTA_POR_PAGAR":
         return "CXP"
 
+    if tipo_normalizado in {"IMPUESTO_CONSUMO", "IMPOCONSUMO", "PROPINA", "AJUSTE", "OTRO_DEBITO"}:
+        return "AJUSTE"
+
     if tipo_normalizado in ["GASTO", "IVA", "CXP"]:
         return tipo_normalizado
 
@@ -1947,17 +1952,27 @@ def construir_linea_respuesta(tipo, cuenta, nombre_cuenta, concepto_servicio, ce
 
     if not tipo_normalizado:
         raise ValueError(
-            f"Tipo de linea no soportado: {tipo}. Use GASTO, IVA o CXP."
+            f"Tipo de linea no soportado: {tipo}. Use GASTO, IVA, AJUSTE o CXP."
         )
 
     cuenta_texto = str(cuenta or "").strip()
     nombre_texto = str(nombre_cuenta or "").strip()
     concepto_texto = str(concepto_servicio or "").strip() or None
 
-    if not cuenta_texto or not nombre_texto:
+    if not cuenta_texto:
         raise ValueError(
-            "Cada linea contable debe incluir tipo, cuenta y nombre de cuenta."
+            "Cada linea contable debe incluir tipo y cuenta."
         )
+
+    if not nombre_texto:
+        if concepto_texto:
+            nombre_texto = concepto_texto.replace("_", " ").title()
+        elif tipo_normalizado == "IVA":
+            nombre_texto = "IVA descontable"
+        elif tipo_normalizado == "CXP":
+            nombre_texto = "Cuenta por pagar"
+        else:
+            nombre_texto = "Gasto"
 
     return {
         "tipo": tipo_normalizado,
@@ -1970,14 +1985,16 @@ def construir_linea_respuesta(tipo, cuenta, nombre_cuenta, concepto_servicio, ce
 
 
 def parsear_linea_tabla_respuesta(line):
-    if "|" in line:
+    if ";" in line:
+        partes = [p.strip() for p in line.split(";")]
+    elif "|" in line:
         partes = [p.strip() for p in line.split("|")]
     elif "\t" in line:
         partes = [p.strip() for p in line.split("\t")]
     else:
         partes = [p.strip() for p in re.split(r"\s{2,}", line)]
 
-    if len(partes) < 4:
+    if len(partes) < 3:
         return None
 
     tipo = partes[0]
@@ -1986,10 +2003,15 @@ def parsear_linea_tabla_respuesta(line):
         return None
 
     cuenta = partes[1]
-    concepto_servicio = partes[-1]
-    nombre_cuenta = " ".join(partes[2:-1]).strip()
 
-    if not cuenta or not nombre_cuenta or not concepto_servicio:
+    if len(partes) == 3:
+        nombre_cuenta = None
+        concepto_servicio = partes[2]
+    else:
+        concepto_servicio = partes[-1]
+        nombre_cuenta = " ".join(partes[2:-1]).strip()
+
+    if not cuenta or not concepto_servicio:
         return None
 
     return tipo, cuenta, nombre_cuenta, concepto_servicio
@@ -2030,7 +2052,8 @@ def parsear_respuesta_causacion(subject: str, body: str):
 
         if line.upper().startswith("LINEA="):
             contenido = line.split("=", 1)[1].strip()
-            partes = [p.strip() for p in contenido.split("|")]
+            separador = ";" if ";" in contenido else "|"
+            partes = [p.strip() for p in contenido.split(separador)]
 
             if len(partes) < 3:
                 raise ValueError(
@@ -2040,8 +2063,8 @@ def parsear_respuesta_causacion(subject: str, body: str):
             lineas.append(construir_linea_respuesta(
                 partes[0],
                 partes[1],
-                partes[2],
-                partes[3] if len(partes) >= 4 else None,
+                partes[2] if len(partes) >= 4 else None,
+                partes[3] if len(partes) >= 4 else partes[2],
                 centro_costo_default
             ))
             continue
@@ -2081,17 +2104,25 @@ def construir_lineas_respuesta_con_valores_factura(factura: dict, lineas_usuario
     subtotal = round(float(factura.get("subtotal") or 0), 2)
     total_sin_impuestos = round(float(factura.get("total_sin_impuestos") or 0), 2)
 
-    if subtotal > 0:
+    if total_pagar > 0:
+        valor_gasto = round(total_pagar - iva, 2)
+    elif subtotal > 0:
         valor_gasto = subtotal
     elif total_sin_impuestos > 0:
         valor_gasto = total_sin_impuestos
     else:
-        valor_gasto = round(total_pagar - iva, 2)
+        valor_gasto = 0
 
     cuentas = {}
+    ajustes = []
 
     for linea in lineas_usuario:
         tipo = linea.get("tipo")
+
+        if tipo == "AJUSTE":
+            ajustes.append(linea)
+            continue
+
         cuentas[tipo] = linea
 
     if "GASTO" not in cuentas:
@@ -2135,6 +2166,23 @@ def construir_lineas_respuesta_con_valores_factura(factura: dict, lineas_usuario
             "descripcion": iva_linea.get("descripcion")
         })
 
+    total_debito_previo = round(sum(float(l.get("debito") or 0) for l in lineas_calculadas), 2)
+    ajuste_debito = round(total_pagar - total_debito_previo, 2)
+
+    if ajuste_debito > 0 and ajustes:
+        ajuste = ajustes[0]
+
+        lineas_calculadas.append({
+            "tipo": "AJUSTE",
+            "cuenta_contable": ajuste.get("cuenta_contable"),
+            "nombre_cuenta": ajuste.get("nombre_cuenta"),
+            "centro_costo": ajuste.get("centro_costo"),
+            "debito": ajuste_debito,
+            "credito": 0,
+            "concepto_servicio": ajuste.get("concepto_servicio") or "AJUSTE",
+            "descripcion": ajuste.get("descripcion") or "Ajuste para cuadrar total de factura"
+        })
+
     cxp = cuentas["CXP"]
 
     lineas_calculadas.append({
@@ -2168,7 +2216,7 @@ def construir_lineas_respuesta_con_valores_factura(factura: dict, lineas_usuario
 
 
 def upsert_mapeo_erp_desde_linea_manual(cursor, factura: dict, linea: dict):
-    if linea.get("tipo") != "GASTO":
+    if linea.get("tipo") not in {"GASTO", "AJUSTE"}:
         return
 
     proveedor_nit = factura.get("proveedor_nit")
