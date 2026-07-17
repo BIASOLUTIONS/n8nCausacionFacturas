@@ -110,6 +110,17 @@ SIIGO_PAYMENT_ID_COMPRA=
 SIIGO_TAX_ID_IVA_19=
 SIIGO_DIAS_VENCIMIENTO_COMPRA=30
 
+# Crea automaticamente proveedores/terceros cuando SIIGO responde que no existen.
+# Si el XML no trae datos obligatorios y no hay valores default, el flujo pedira esos datos por correo.
+SIIGO_AUTO_CREAR_PROVEEDOR=true
+SIIGO_PROVEEDOR_RESPONSABILIDAD_DEFAULT=R-99-PN
+SIIGO_PROVEEDOR_PAIS_DEFAULT=CO
+SIIGO_PROVEEDOR_DEPARTAMENTO_DEFAULT=
+SIIGO_PROVEEDOR_CIUDAD_DEFAULT=
+SIIGO_PROVEEDOR_DIRECCION_DEFAULT=
+SIIGO_PROVEEDOR_TELEFONO_DEFAULT=
+SIIGO_PROVEEDOR_EMAIL_DEFAULT=
+
 IMAP_HOST=imap.gmail.com
 IMAP_PORT=993
 IMAP_SECURE=true
@@ -124,6 +135,35 @@ NITS_CLIENTE_PERMITIDOS=
 # Si el proveedor tiene varios conceptos activos, el sistema seguira pidiendo revision.
 AUTO_CLASIFICAR_CONCEPTO_UNICO_PROVEEDOR=true
 ```
+
+Si se quieren evitar correos pidiendo ciudad/direccion para proveedores nuevos, se pueden configurar valores por defecto, por ejemplo Bogota:
+
+```env
+SIIGO_PROVEEDOR_DEPARTAMENTO_DEFAULT=11
+SIIGO_PROVEEDOR_CIUDAD_DEFAULT=11001
+SIIGO_PROVEEDOR_DIRECCION_DEFAULT=SIN DIRECCION
+```
+
+Si esos valores quedan vacios, el sistema no inventa datos: enviara un correo con el marcador `#CREAR_PROVEEDOR_SIIGO`.
+
+Formato de respuesta cuando falten datos del proveedor:
+
+```text
+#CREAR_PROVEEDOR_SIIGO
+
+CAUSACION_ID=7
+NOMBRE=DE LA PAVA Y COMPANIA S A S
+NIT=805002135
+DIRECCION=CL 00 00 00
+DEPARTAMENTO_CODIGO=76
+CIUDAD_CODIGO=76001
+PAIS_CODIGO=CO
+RESPONSABILIDAD_FISCAL=R-99-PN
+TELEFONO=
+EMAIL=
+```
+
+Despues de recibir esa respuesta, n8n llama al backend, el backend crea el proveedor en SIIGO y el flujo reintenta enviar la compra. Si el envio queda confirmado, continua el postproceso de OneDrive e IMAP.
 
 No subir `.env.production` ni `python-api/.env.production` al repo.
 

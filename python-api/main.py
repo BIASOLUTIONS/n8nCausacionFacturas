@@ -26,6 +26,10 @@ AUTO_CLASIFICAR_CONCEPTO_UNICO_PROVEEDOR = (
     os.getenv("AUTO_CLASIFICAR_CONCEPTO_UNICO_PROVEEDOR", "true").strip().lower()
     not in {"0", "false", "no", "off"}
 )
+SIIGO_AUTO_CREAR_PROVEEDOR = (
+    os.getenv("SIIGO_AUTO_CREAR_PROVEEDOR", "true").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
 
 os.makedirs(ADJUNTOS_PATH, exist_ok=True)
 os.makedirs(PROCESADAS_PATH, exist_ok=True)
@@ -1366,6 +1370,21 @@ def validar_nit_cliente_permitido(datos_factura):
     }
 
 
+def texto_atributo(element, xpath, atributo, ns):
+    nodo = element.find(xpath, namespaces=ns)
+
+    if nodo is None:
+        return None
+
+    valor = nodo.get(atributo)
+
+    if valor is None:
+        return None
+
+    valor = str(valor).strip()
+    return valor or None
+
+
 def extraer_datos_xml(xml_path: str):
     root = cargar_xml_factura(xml_path)
 
@@ -1395,6 +1414,12 @@ def extraer_datos_xml(xml_path: str):
     proveedor_nit = texto(
         root,
         ".//cac:AccountingSupplierParty//cac:Party//cac:PartyTaxScheme//cbc:CompanyID",
+        ns
+    )
+    proveedor_dv = texto_atributo(
+        root,
+        ".//cac:AccountingSupplierParty//cac:Party//cac:PartyTaxScheme//cbc:CompanyID",
+        "schemeID",
         ns
     )
 
@@ -1457,6 +1482,7 @@ def extraer_datos_xml(xml_path: str):
         "cufe": cufe,
         "proveedor_nombre": proveedor_nombre,
         "proveedor_nit": proveedor_nit,
+        "proveedor_dv": proveedor_dv,
         "cliente_nombre": cliente_nombre,
         "cliente_nit": cliente_nit,
         "subtotal": subtotal,
@@ -2173,6 +2199,101 @@ def parsear_respuesta_causacion(subject: str, body: str):
         "factura_id": factura_id,
         "centro_costo": centro_costo_default,
         "lineas": lineas
+    }
+
+
+def parsear_respuesta_proveedor_siigo(subject: str, body: str):
+    texto_limpio = limpiar_cuerpo_correo(body)
+
+    if "#CREAR_PROVEEDOR_SIIGO" not in texto_limpio:
+        raise ValueError("No se encontro el marcador #CREAR_PROVEEDOR_SIIGO en la respuesta.")
+
+    datos = {}
+
+    for raw_line in texto_limpio.splitlines():
+        line = raw_line.strip()
+
+        if not line or line.startswith(">"):
+            continue
+
+        if "=" not in line:
+            continue
+
+        clave, valor = line.split("=", 1)
+        clave = normalizar_clave_excel(clave)
+        valor = valor.strip()
+
+        if clave:
+            datos[clave] = valor
+
+    causacion_id = datos.get("causacion_id")
+
+    if not causacion_id:
+        match = re.search(r"CAUSACI[OÓ]N\s+(\d+)", subject or "", flags=re.IGNORECASE)
+        causacion_id = match.group(1) if match else None
+
+    if not causacion_id:
+        raise ValueError("No se encontro CAUSACION_ID en la respuesta de proveedor.")
+
+    try:
+        causacion_id = int(causacion_id)
+    except Exception:
+        raise ValueError("CAUSACION_ID debe ser numerico.")
+
+    return {
+        "causacion_id": causacion_id,
+        "extras": {
+            "nombre": datos.get("nombre"),
+            "nit": datos.get("nit"),
+            "direccion": datos.get("direccion"),
+            "departamento_codigo": datos.get("departamento_codigo"),
+            "ciudad_codigo": datos.get("ciudad_codigo"),
+            "pais_codigo": datos.get("pais_codigo") or "CO",
+            "responsabilidad_fiscal": datos.get("responsabilidad_fiscal") or "R-99-PN",
+            "telefono": datos.get("telefono"),
+            "email": datos.get("email"),
+            "check_digit": datos.get("digito_verificacion") or datos.get("check_digit")
+        }
+    }
+
+
+def procesar_respuesta_proveedor_siigo(payload: dict):
+    from siigo_client import SiigoClient
+
+    subject = payload.get("subject", "")
+    body = payload.get("body", "")
+    datos = parsear_respuesta_proveedor_siigo(subject, body)
+    causacion_id = datos["causacion_id"]
+
+    resultado = construir_payload_siigo_compra_desde_causacion(causacion_id)
+    factura = resultado["factura"]
+
+    client = SiigoClient()
+    proveedor = asegurar_proveedor_siigo(
+        client,
+        factura,
+        causacion_id,
+        datos.get("extras")
+    )
+
+    if proveedor.get("requiere_datos"):
+        return respuesta_requiere_datos_proveedor(
+            causacion_id,
+            factura,
+            proveedor.get("datos") or {}
+        )
+
+    return {
+        "ok": True,
+        "estado": "PROVEEDOR_SIIGO_CREADO",
+        "mensaje": "Proveedor validado o creado en SIIGO. La compra puede reenviarse.",
+        "factura_id": factura.get("id"),
+        "causacion_id": causacion_id,
+        "proveedor_nit": factura.get("proveedor_nit"),
+        "proveedor_nombre": factura.get("proveedor_nombre"),
+        "numero_factura": factura.get("numero_factura"),
+        "proveedor_siigo": proveedor.get("proveedor_siigo"),
+        "payload_proveedor": proveedor.get("payload_proveedor")
     }
 
 
@@ -3568,6 +3689,9 @@ def procesar_respuesta_revision(payload: dict = Body(...)):
     from_email = payload.get("from", "")
 
     try:
+        if "#CREAR_PROVEEDOR_SIIGO" in limpiar_cuerpo_correo(body):
+            return procesar_respuesta_proveedor_siigo(payload)
+
         datos = parsear_respuesta_causacion(subject, body)
 
         factura_id = datos["factura_id"]
@@ -4134,6 +4258,344 @@ def obtener_env_int(nombre: str):
     return int(valor)
 
 
+def obtener_env_texto(nombre, default=None):
+    valor = os.getenv(nombre)
+
+    if valor is None:
+        return default
+
+    valor = str(valor).strip()
+    return valor if valor else default
+
+
+def calcular_digito_verificacion_nit(nit: str | None):
+    nit_normalizado = normalizar_nit(nit)
+
+    if not nit_normalizado:
+        return None
+
+    pesos = [71, 67, 59, 53, 47, 43, 41, 37, 29, 23, 19, 17, 13, 7, 3]
+    digitos = [int(d) for d in nit_normalizado if d.isdigit()]
+    pesos_usar = pesos[-len(digitos):]
+    suma = sum(d * p for d, p in zip(digitos, pesos_usar))
+    residuo = suma % 11
+
+    if residuo in [0, 1]:
+        return str(residuo)
+
+    return str(11 - residuo)
+
+
+def extraer_datos_proveedor_siigo_desde_xml(xml_path: str | None):
+    datos = {}
+
+    if not xml_path or not os.path.exists(xml_path):
+        return datos
+
+    try:
+        root = cargar_xml_factura(xml_path)
+    except Exception:
+        return datos
+
+    ns = {
+        "cbc": "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2",
+        "cac": "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+    }
+
+    party_path = ".//cac:AccountingSupplierParty//cac:Party"
+
+    datos["nombre"] = (
+        texto(root, party_path + "//cac:PartyLegalEntity//cbc:RegistrationName", ns)
+        or texto(root, party_path + "//cac:PartyName//cbc:Name", ns)
+    )
+    datos["nit"] = texto(root, party_path + "//cac:PartyTaxScheme//cbc:CompanyID", ns)
+    datos["check_digit"] = texto_atributo(
+        root,
+        party_path + "//cac:PartyTaxScheme//cbc:CompanyID",
+        "schemeID",
+        ns
+    )
+
+    address_paths = [
+        party_path + "//cac:PhysicalLocation//cac:Address",
+        party_path + "//cac:PartyLegalEntity//cac:RegistrationAddress",
+        party_path + "//cac:PartyTaxScheme//cac:RegistrationAddress"
+    ]
+
+    for address_path in address_paths:
+        direccion = (
+            texto(root, address_path + "//cac:AddressLine//cbc:Line", ns)
+            or texto(root, address_path + "/cbc:StreetName", ns)
+        )
+        ciudad_codigo = texto(root, address_path + "/cbc:ID", ns)
+        ciudad_nombre = texto(root, address_path + "/cbc:CityName", ns)
+        departamento_codigo = texto(root, address_path + "/cbc:CountrySubentityCode", ns)
+        departamento_nombre = texto(root, address_path + "/cbc:CountrySubentity", ns)
+        pais_codigo = texto(root, address_path + "//cac:Country/cbc:IdentificationCode", ns)
+
+        if direccion and not datos.get("direccion"):
+            datos["direccion"] = direccion
+
+        if ciudad_codigo and not datos.get("ciudad_codigo"):
+            datos["ciudad_codigo"] = ciudad_codigo
+
+        if ciudad_nombre and not datos.get("ciudad_nombre"):
+            datos["ciudad_nombre"] = ciudad_nombre
+
+        if departamento_codigo and not datos.get("departamento_codigo"):
+            datos["departamento_codigo"] = departamento_codigo
+
+        if departamento_nombre and not datos.get("departamento_nombre"):
+            datos["departamento_nombre"] = departamento_nombre
+
+        if pais_codigo and not datos.get("pais_codigo"):
+            datos["pais_codigo"] = pais_codigo.upper()
+
+    datos["email"] = texto(root, party_path + "//cac:Contact//cbc:ElectronicMail", ns)
+    datos["telefono"] = texto(root, party_path + "//cac:Contact//cbc:Telephone", ns)
+
+    return {k: v for k, v in datos.items() if v not in [None, ""]}
+
+
+def consultar_proveedor_siigo(client, nit: str):
+    nit_normalizado = normalizar_nit(nit)
+
+    if not nit_normalizado:
+        return None
+
+    respuesta = client.get(
+        "/v1/customers",
+        params={
+            "identification": nit_normalizado,
+            "branch_office": 0,
+            "page": 1,
+            "page_size": 25
+        }
+    )
+
+    if isinstance(respuesta, list):
+        candidatos = respuesta
+    else:
+        candidatos = (
+            respuesta.get("results")
+            or respuesta.get("data")
+            or respuesta.get("items")
+            or []
+        )
+
+    for candidato in candidatos:
+        identificacion = normalizar_nit(candidato.get("identification"))
+        sucursal = candidato.get("branch_office", 0)
+
+        if identificacion == nit_normalizado and int(sucursal or 0) == 0:
+            return candidato
+
+    return None
+
+
+def construir_datos_proveedor_siigo(factura: dict, extras: dict | None = None):
+    extras = extras or {}
+    xml_datos = extraer_datos_proveedor_siigo_desde_xml(factura.get("xml_principal"))
+
+    def tomar(clave, *envs):
+        for origen in [extras, xml_datos, factura]:
+            valor = origen.get(clave)
+            if valor not in [None, ""]:
+                return str(valor).strip()
+
+        for env_name in envs:
+            valor = obtener_env_texto(env_name)
+            if valor:
+                return valor
+
+        return None
+
+    nit = normalizar_nit(tomar("nit") or factura.get("proveedor_nit"))
+    nombre = tomar("nombre") or factura.get("proveedor_nombre")
+    direccion = tomar("direccion", "SIIGO_PROVEEDOR_DIRECCION_DEFAULT")
+    pais_codigo = tomar("pais_codigo", "SIIGO_PROVEEDOR_PAIS_DEFAULT") or "CO"
+    departamento_codigo = tomar("departamento_codigo", "SIIGO_PROVEEDOR_DEPARTAMENTO_DEFAULT")
+    ciudad_codigo = tomar("ciudad_codigo", "SIIGO_PROVEEDOR_CIUDAD_DEFAULT")
+    responsabilidad = tomar("responsabilidad_fiscal", "SIIGO_PROVEEDOR_RESPONSABILIDAD_DEFAULT") or "R-99-PN"
+    telefono = tomar("telefono", "SIIGO_PROVEEDOR_TELEFONO_DEFAULT")
+    email = tomar("email", "SIIGO_PROVEEDOR_EMAIL_DEFAULT")
+    check_digit = tomar("check_digit") or calcular_digito_verificacion_nit(nit)
+
+    faltantes = []
+
+    if not nit:
+        faltantes.append("NIT")
+
+    if not nombre:
+        faltantes.append("NOMBRE")
+
+    if not direccion:
+        faltantes.append("DIRECCION")
+
+    if not departamento_codigo:
+        faltantes.append("DEPARTAMENTO_CODIGO")
+
+    if not ciudad_codigo:
+        faltantes.append("CIUDAD_CODIGO")
+
+    return {
+        "nit": nit,
+        "nombre": nombre,
+        "check_digit": check_digit,
+        "direccion": direccion,
+        "pais_codigo": pais_codigo,
+        "departamento_codigo": departamento_codigo,
+        "ciudad_codigo": ciudad_codigo,
+        "responsabilidad_fiscal": responsabilidad,
+        "telefono": telefono,
+        "email": email,
+        "faltantes": faltantes,
+        "xml_datos": xml_datos,
+        "extras": extras
+    }
+
+
+def construir_payload_proveedor_siigo(datos: dict):
+    payload = {
+        "type": "Supplier",
+        "person_type": "Company",
+        "id_type": "31",
+        "identification": datos.get("nit"),
+        "name": [
+            datos.get("nombre")
+        ],
+        "commercial_name": datos.get("nombre"),
+        "branch_office": 0,
+        "active": True,
+        "vat_responsible": True,
+        "fiscal_responsibilities": [
+            {
+                "code": datos.get("responsabilidad_fiscal") or "R-99-PN"
+            }
+        ],
+        "address": {
+            "address": datos.get("direccion"),
+            "city": {
+                "country_code": datos.get("pais_codigo") or "CO",
+                "state_code": datos.get("departamento_codigo"),
+                "city_code": datos.get("ciudad_codigo")
+            }
+        },
+        "comments": "Creado automaticamente desde FacturasIA."
+    }
+
+    if datos.get("check_digit"):
+        payload["check_digit"] = str(datos.get("check_digit"))
+
+    telefono = re.sub(r"\D+", "", str(datos.get("telefono") or ""))
+
+    if telefono:
+        payload["phones"] = [
+            {
+                "indicative": "57",
+                "number": telefono[:10]
+            }
+        ]
+
+    if datos.get("email"):
+        payload["contacts"] = [
+            {
+                "first_name": datos.get("nombre")[:50],
+                "last_name": "Proveedor",
+                "email": datos.get("email")
+            }
+        ]
+
+    return payload
+
+
+def respuesta_requiere_datos_proveedor(causacion_id: int, factura: dict, datos: dict):
+    mensaje = "El proveedor no existe en SIIGO y faltan datos para crearlo automaticamente."
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE causaciones
+        SET estado = ?, mensaje = ?
+        WHERE id = ?
+    """, (
+        "REQUIERE_DATOS_PROVEEDOR_SIIGO",
+        mensaje,
+        causacion_id
+    ))
+    conn.commit()
+    conn.close()
+
+    return JSONResponse(
+        status_code=400,
+        content={
+            "ok": False,
+            "estado": "REQUIERE_DATOS_PROVEEDOR_SIIGO",
+            "mensaje": mensaje,
+            "causacion_id": causacion_id,
+            "factura_id": factura.get("id"),
+            "proveedor_nombre": factura.get("proveedor_nombre"),
+            "proveedor_nit": factura.get("proveedor_nit"),
+            "numero_factura": factura.get("numero_factura"),
+            "datos_proveedor": {
+                k: v for k, v in datos.items()
+                if k not in {"xml_datos", "extras"}
+            },
+            "datos_faltantes": datos.get("faltantes") or [],
+            "formato_respuesta": (
+                "#CREAR_PROVEEDOR_SIIGO\n\n"
+                f"CAUSACION_ID={causacion_id}\n"
+                f"NOMBRE={factura.get('proveedor_nombre') or ''}\n"
+                f"NIT={factura.get('proveedor_nit') or ''}\n"
+                "DIRECCION=\n"
+                "DEPARTAMENTO_CODIGO=\n"
+                "CIUDAD_CODIGO=\n"
+                "PAIS_CODIGO=CO\n"
+                "RESPONSABILIDAD_FISCAL=R-99-PN\n"
+                "TELEFONO=\n"
+                "EMAIL=\n"
+            )
+        }
+    )
+
+
+def asegurar_proveedor_siigo(client, factura: dict, causacion_id: int, extras: dict | None = None):
+    if not SIIGO_AUTO_CREAR_PROVEEDOR:
+        return {
+            "ok": True,
+            "auto_creacion_habilitada": False,
+            "mensaje": "Creacion automatica de proveedor deshabilitada."
+        }
+
+    existente = consultar_proveedor_siigo(client, factura.get("proveedor_nit"))
+
+    if existente:
+        return {
+            "ok": True,
+            "proveedor_existia": True,
+            "proveedor_siigo": existente
+        }
+
+    datos = construir_datos_proveedor_siigo(factura, extras)
+
+    if datos.get("faltantes"):
+        return {
+            "ok": False,
+            "requiere_datos": True,
+            "datos": datos
+        }
+
+    payload = construir_payload_proveedor_siigo(datos)
+    respuesta = client.post("/v1/customers", payload)
+
+    return {
+        "ok": True,
+        "proveedor_creado": True,
+        "proveedor_siigo": respuesta,
+        "payload_proveedor": payload
+    }
+
+
 def ajustar_redondeo_items_siigo(items: list, total_pagar: float, iva: float):
     if not items or iva <= 0 or total_pagar <= 0:
         return None
@@ -4602,6 +5064,19 @@ def siigo_enviar_compra(causacion_id: int):
         payload = resultado["payload"]
 
         client = SiigoClient()
+        proveedor = asegurar_proveedor_siigo(
+            client,
+            resultado["factura"],
+            causacion_id
+        )
+
+        if proveedor.get("requiere_datos"):
+            return respuesta_requiere_datos_proveedor(
+                causacion_id,
+                resultado["factura"],
+                proveedor.get("datos") or {}
+            )
+
         respuesta_siigo = client.post("/v1/purchases", payload)
 
         siigo_id = (
