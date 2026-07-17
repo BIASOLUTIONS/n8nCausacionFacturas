@@ -3067,6 +3067,28 @@ def uid_desde_respuesta_search(data):
     return texto.split()[0]
 
 
+def mailboxes_busqueda_imap(origen):
+    candidatos = [
+        origen,
+        os.getenv("IMAP_SOURCE_MAILBOX", "INBOX"),
+        "INBOX",
+        "[Gmail]/All Mail",
+        "[Gmail]/Todos",
+        "[Gmail]/Todos los correos",
+        "All Mail",
+        "Todos"
+    ]
+    resultado = []
+
+    for candidato in candidatos:
+        candidato = str(candidato or "").strip()
+
+        if candidato and candidato not in resultado:
+            resultado.append(candidato)
+
+    return resultado
+
+
 def archivar_correo_imap(
     email_uid: str = "",
     email_message_id_header: str = "",
@@ -3092,18 +3114,34 @@ def archivar_correo_imap(
     try:
         imap.login(user, password)
 
-        status, _ = imap.select(mailbox_imap(origen), readonly=False)
-        if status != "OK":
-            raise ValueError(f"No se pudo abrir el mailbox origen IMAP: {origen}")
+        mailbox_encontrado = origen
 
         if not uid:
-            status, data = imap.uid("SEARCH", None, "HEADER", "Message-ID", message_id)
+            for mailbox in mailboxes_busqueda_imap(origen):
+                status, _ = imap.select(mailbox_imap(mailbox), readonly=False)
+
+                if status != "OK":
+                    continue
+
+                status, data = imap.uid("SEARCH", None, "HEADER", "Message-ID", message_id)
+
+                if status == "OK":
+                    uid = uid_desde_respuesta_search(data)
+
+                if uid:
+                    mailbox_encontrado = mailbox
+                    break
+
+        else:
+            status, _ = imap.select(mailbox_imap(origen), readonly=False)
             if status != "OK":
-                raise ValueError("No se pudo buscar el correo por Message-ID en IMAP.")
-            uid = uid_desde_respuesta_search(data)
+                raise ValueError(f"No se pudo abrir el mailbox origen IMAP: {origen}")
 
         if not uid:
-            raise ValueError("No se encontro el correo en IMAP.")
+            raise ValueError(
+                "No se encontro el correo en IMAP por UID ni Message-ID. "
+                "Revise si n8n esta enviando email_uid o email_message_id_header."
+            )
 
         imap.create(mailbox_imap(destino))
 
@@ -3128,7 +3166,7 @@ def archivar_correo_imap(
             "estado": "CORREO_ARCHIVADO_IMAP",
             "mensaje": "Correo movido por IMAP correctamente.",
             "uid": uid,
-            "source_mailbox": origen,
+            "source_mailbox": mailbox_encontrado,
             "target_mailbox": destino,
             "metodo": metodo
         }
