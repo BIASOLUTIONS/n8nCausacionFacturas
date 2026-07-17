@@ -109,6 +109,7 @@ SIIGO_DOCUMENT_ID_COMPRA=
 SIIGO_PAYMENT_ID_COMPRA=
 SIIGO_TAX_ID_IVA_19=
 SIIGO_DIAS_VENCIMIENTO_COMPRA=30
+SIIGO_MAX_AJUSTE_REDONDEO=1.00
 
 # Crea automaticamente proveedores/terceros cuando SIIGO responde que no existen.
 # Si el XML no trae datos obligatorios y no hay valores default, el flujo pedira esos datos por correo.
@@ -135,6 +136,8 @@ NITS_CLIENTE_PERMITIDOS=
 # Si el proveedor tiene varios conceptos activos, el sistema seguira pidiendo revision.
 AUTO_CLASIFICAR_CONCEPTO_UNICO_PROVEEDOR=true
 ```
+
+`SIIGO_MAX_AJUSTE_REDONDEO` permite ajustar la base del item cuando el XML trae IVA redondeado y SIIGO recalcula el impuesto con una diferencia pequena. Mantenerlo bajo, por ejemplo `1.00`, evita corregir diferencias reales de contabilizacion.
 
 Si se quieren evitar correos pidiendo ciudad/direccion para proveedores nuevos, se pueden configurar valores por defecto, por ejemplo Bogota:
 

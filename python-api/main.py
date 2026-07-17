@@ -4653,12 +4653,21 @@ def ajustar_redondeo_items_siigo(items: list, total_pagar: float, iva: float):
             "motivo": "No requiere ajuste de redondeo."
         }
 
-    if abs(diferencia) > 0.02:
+    try:
+        max_ajuste = float(os.getenv("SIIGO_MAX_AJUSTE_REDONDEO", "1.00"))
+    except ValueError:
+        max_ajuste = 1.00
+
+    if max_ajuste < 0:
+        max_ajuste = 0
+
+    if abs(diferencia) > max_ajuste:
         return {
             "aplicado": False,
             "total_calculado": total_calculado,
             "total_pagar": total_pagar,
             "diferencia": diferencia,
+            "max_ajuste": max_ajuste,
             "motivo": "Diferencia fuera del rango de redondeo automatico."
         }
 
@@ -4687,7 +4696,8 @@ def ajustar_redondeo_items_siigo(items: list, total_pagar: float, iva: float):
         "total_calculado": total_calculado,
         "total_ajustado": total_ajustado,
         "total_pagar": total_pagar,
-        "diferencia": diferencia
+        "diferencia": diferencia,
+        "max_ajuste": max_ajuste
     }
 
 
